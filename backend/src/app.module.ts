@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { JobsModule } from './modules/jobs/jobs.module';
 import { HealthController } from './health.controller';
 import { RATE_LIMIT_CONFIG } from './config/security.config';
 
@@ -27,6 +28,7 @@ import { RATE_LIMIT_CONFIG } from './config/security.config';
     AuthModule,
     SettingsModule,
     PaymentsModule,
+    JobsModule,
   ],
   controllers: [HealthController],
   providers: [
