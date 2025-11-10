@@ -7,7 +7,9 @@ Comprehensive testing suite for the Tezos Automatic Payment System.
 The test suite covers:
 - Unit tests for critical business logic
 - Integration tests for end-to-end flows
-- API integration tests
+- API integration tests for all REST endpoints
+- Security tests (authentication, authorization, SQL injection, XSS)
+- Load/performance tests
 - Test fixtures and utilities
 
 ## Test Structure
@@ -24,6 +26,16 @@ test/
 │   └── tezos-client.spec.ts
 ├── integration/       # Integration tests
 │   └── distribution.e2e-spec.ts
+├── api/               # API integration tests
+│   ├── auth.api-spec.ts
+│   ├── settings.api-spec.ts
+│   ├── payments.api-spec.ts
+│   └── jobs.api-spec.ts
+├── security/          # Security tests
+│   └── security.spec.ts
+├── load/              # Load testing
+│   ├── artillery-config.yml
+│   └── k6-load-test.js
 └── README.md
 ```
 
@@ -44,6 +56,16 @@ npm test -- --testPathPattern=unit
 npm test -- --testPathPattern=integration
 ```
 
+### API Tests Only
+```bash
+npm test -- --testPathPattern=api
+```
+
+### Security Tests Only
+```bash
+npm test -- --testPathPattern=security
+```
+
 ### Watch Mode
 ```bash
 npm run test:watch
@@ -52,6 +74,18 @@ npm run test:watch
 ### Coverage Report
 ```bash
 npm run test:cov
+```
+
+### Load Testing (Artillery)
+```bash
+npm install -g artillery
+artillery run test/load/artillery-config.yml
+```
+
+### Load Testing (K6)
+```bash
+# Install k6: https://k6.io/docs/getting-started/installation/
+k6 run test/load/k6-load-test.js
 ```
 
 ## Coverage Requirements
@@ -119,6 +153,149 @@ Tests the complete distribution workflow from detection to payment.
 **Run:**
 ```bash
 npm test -- distribution.e2e
+```
+
+### 3. API Integration Tests
+
+Comprehensive API tests for all REST endpoints with authentication, validation, and error handling.
+
+#### Auth API Tests
+Tests authentication endpoints including login, logout, password change, and user info.
+
+**Key Test Cases:**
+- Successful login with valid credentials
+- Failed login with invalid credentials
+- JWT token validation
+- Password change with current password verification
+- User information retrieval
+- Wallet passphrase verification
+- Security: SQL injection and XSS prevention
+
+**Run:**
+```bash
+npm test -- auth.api
+```
+
+#### Settings API Tests
+Tests baker settings management endpoints.
+
+**Key Test Cases:**
+- Get current settings
+- Update settings (fees, mode, thresholds)
+- Update operation mode
+- Get system status
+- Input validation (fee ranges, decimal precision)
+- Security: data isolation between bakers
+
+**Run:**
+```bash
+npm test -- settings.api
+```
+
+#### Payments API Tests
+Tests payment history and distribution endpoints.
+
+**Key Test Cases:**
+- Paginated payment history
+- Filter by status, date range
+- Get cycle-specific payments
+- Get pending cycle
+- Trigger distribution (requires wallet auth)
+- Security: baker payment isolation
+
+**Run:**
+```bash
+npm test -- payments.api
+```
+
+#### Jobs API Tests
+Tests background job management endpoints.
+
+**Key Test Cases:**
+- Trigger cycle check manually
+- Trigger balance poll manually
+- Get job status
+- Initialize job schedules
+- Remove job schedules
+- HTTP method validation
+
+**Run:**
+```bash
+npm test -- jobs.api
+```
+
+### 4. Security Tests
+
+Comprehensive security testing covering authentication, authorization, injection attacks, and data protection.
+
+**Key Test Areas:**
+- JWT authentication enforcement on all protected endpoints
+- Authorization and data isolation between bakers
+- SQL injection prevention (login, queries, updates)
+- XSS prevention (input sanitization, output encoding)
+- Input validation (ranges, types, required fields)
+- Password security (bcrypt hashing, no plaintext exposure)
+- Sensitive data protection (wallet credentials, password hashes)
+- Error message security (no system details leaked)
+
+**Run:**
+```bash
+npm test -- security
+```
+
+**Security Test Coverage:**
+- 10+ endpoint authentication tests
+- 5+ authorization isolation tests
+- 20+ SQL injection payloads tested
+- 10+ XSS payloads tested
+- 15+ input validation tests
+- 5+ password security tests
+- 5+ sensitive data protection tests
+
+### 5. Load/Performance Tests
+
+Performance and load testing using Artillery and K6 to verify system behavior under load.
+
+#### Artillery Load Tests
+YAML-based load testing with multiple phases: warm-up, ramp-up, sustained load, spike, cool-down.
+
+**Test Scenarios:**
+- Authentication flow (30% weight)
+- Settings management (25% weight)
+- Payment history browsing (30% weight)
+- Job management (15% weight)
+
+**Performance Thresholds:**
+- Max error rate: 1%
+- Max response time: 2000ms
+- 95th percentile: < 1000ms
+- 99th percentile: < 1500ms
+
+**Run:**
+```bash
+artillery run test/load/artillery-config.yml
+```
+
+#### K6 Load Tests
+JavaScript-based load testing with detailed metrics and custom thresholds.
+
+**Load Profile:**
+- Warm-up: 1min to 10 users
+- Ramp-up: 3min to 50 users
+- Sustained: 5min at 50 users
+- Spike: 1min to 100 users
+- Sustained spike: 2min at 100 users
+- Cool-down: 1min to 0 users
+
+**Custom Metrics:**
+- Login duration
+- Settings operation duration
+- Payments query duration
+- Job trigger duration
+
+**Run:**
+```bash
+k6 run test/load/k6-load-test.js
 ```
 
 ## Test Fixtures
