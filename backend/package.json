@@ -33,6 +33,7 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.2.10",
     "@nestjs/schedule": "^4.0.0",
+    "@nestjs/swagger": "^7.4.2",
     "@nestjs/throttler": "^5.2.0",
     "@prisma/client": "^5.7.0",
     "@taquito/signer": "^17.3.2",
@@ -52,6 +53,7 @@
     "qrcode": "^1.5.3",
     "reflect-metadata": "^0.1.14",
     "rxjs": "^7.8.1",
+    "swagger-ui-express": "^5.0.1",
     "zod": "^3.22.4"
   },
   "devDependencies": {
