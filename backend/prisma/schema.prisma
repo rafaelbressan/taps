@@ -10,6 +10,28 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Enums for type safety
+enum OperationMode {
+  off
+  simulation
+  on
+}
+
+enum PaymentStatus {
+  rewards_pending
+  rewards_delivered
+  paid
+  simulated
+  errors
+}
+
+enum DelegatorPaymentStatus {
+  applied
+  simulated
+  failed
+  not_available
+}
+
 model Settings {
   bakerId              String   @id @map("baker_id") @db.VarChar(50)
   defaultFee           Decimal  @map("default_fee") @db.Decimal(6, 2)
@@ -17,7 +39,7 @@ model Settings {
   userName             String?  @map("user_name") @db.VarChar(100)
   passHash             String?  @map("pass_hash") @db.VarChar(150)
   applicationPort      Int      @map("application_port")
-  mode                 String?  @db.VarChar(20) // 'off', 'simulation', 'on'
+  mode                 OperationMode @default(simulation)
   hashSalt             String?  @map("hash_salt") @db.VarChar(150)
   walletHash           String?  @map("wallet_hash") @db.VarChar(150)
   walletSalt           String?  @map("wallet_salt") @db.VarChar(150)
@@ -50,7 +72,7 @@ model Payment {
   bakerId         String   @map("baker_id") @db.VarChar(50)
   cycle           Int
   date            DateTime @db.Date
-  result          String   @db.VarChar(20) // 'rewards_pending', 'rewards_delivered', 'paid', 'simulated', 'errors'
+  result          PaymentStatus
   total           Decimal  @db.Decimal(20, 6)
   transactionHash String?  @map("transaction_hash") @db.VarChar(70)
 
@@ -72,7 +94,7 @@ model DelegatorPayment {
   cycle           Int
   address         String   @db.VarChar(50)
   date            DateTime @db.Date
-  result          String   @db.VarChar(20) // 'applied', 'simulated', 'failed', 'not available'
+  result          DelegatorPaymentStatus
   total           Decimal  @db.Decimal(20, 6)
   transactionHash String?  @map("transaction_hash") @db.VarChar(70)
 
@@ -120,11 +142,12 @@ model BondPoolMember {
   amount     Decimal  @db.Decimal(20, 2)
   name       String?  @db.VarChar(50)
   admCharge  Decimal  @map("adm_charge") @db.Decimal(20, 2)
-  isManager  Boolean? @map("is_manager")
+  isManager  Boolean? @map("is_manager") @default(false)
 
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@id([bakerId, address])
+  @@index([isManager])
   @@map("bond_pool")
 }
