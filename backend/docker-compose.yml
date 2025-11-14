@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: taps-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taps_user
+      POSTGRES_PASSWORD: taps_password
+      POSTGRES_DB: taps_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U taps_user -d taps_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taps-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: taps-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taps-network
+
+  # Uncomment to run the application in Docker
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: taps-backend
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     DATABASE_URL: postgresql://taps_user:taps_password@postgres:5432/taps_db?schema=public
+  #     REDIS_HOST: redis
+  #     REDIS_PORT: 6379
+  #   ports:
+  #     - '3000:3000'
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - taps-network
+  #   volumes:
+  #     - ./logs:/app/logs
+  #     - ./wallet:/app/wallet
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  taps-network:
+    driver: bridge

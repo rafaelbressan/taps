@@ -1,0 +1,130 @@
+// TAPS Database Schema
+// Based on migration-docs/DATABASE_SCHEMA.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Settings {
+  bakerId              String   @id @map("baker_id") @db.VarChar(50)
+  defaultFee           Decimal  @map("default_fee") @db.Decimal(6, 2)
+  updateFreq           Int      @map("update_freq")
+  userName             String?  @map("user_name") @db.VarChar(100)
+  passHash             String?  @map("pass_hash") @db.VarChar(150)
+  applicationPort      Int      @map("application_port")
+  mode                 String?  @db.VarChar(20) // 'off', 'simulation', 'on'
+  hashSalt             String?  @map("hash_salt") @db.VarChar(150)
+  walletHash           String?  @map("wallet_hash") @db.VarChar(150)
+  walletSalt           String?  @map("wallet_salt") @db.VarChar(150)
+  encryptedPassphrase  String?  @map("encrypted_passphrase") @db.VarChar(255)
+  appPassphrase        String?  @map("app_passphrase") @db.VarChar(255)
+  delegate             String?  @map("delegate") @db.VarChar(50) @default("")
+  proxyServer          String?  @map("proxy_server") @db.VarChar(70) @default("")
+  proxyPort            Int      @map("proxy_port") @default(80)
+  provider             String   @db.VarChar(70)
+  gasLimit             Int      @map("gas_limit") @default(15400)
+  storageLimit         Int      @map("storage_limit") @default(300)
+  transactionFee       Decimal  @map("transaction_fee") @db.Decimal(20, 6) @default(0.001800)
+  blockExplorer        String   @map("block_explorer") @db.VarChar(70)
+  numBlocksWait        Int      @map("num_blocks_wait") @default(8)
+  paymentRetries       Int      @map("payment_retries") @default(1)
+  minBetweenRetries    Int      @map("min_between_retries") @default(1)
+
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  payments             Payment[]
+  delegatorsFees       DelegatorFee[]
+  bondPoolSettings     BondPoolSettings?
+
+  @@map("settings")
+}
+
+model Payment {
+  id              Int      @id @default(autoincrement())
+  bakerId         String   @map("baker_id") @db.VarChar(50)
+  cycle           Int
+  date            DateTime @db.Date
+  result          String   @db.VarChar(20) // 'rewards_pending', 'rewards_delivered', 'paid', 'simulated', 'errors'
+  total           Decimal  @db.Decimal(20, 6)
+  transactionHash String?  @map("transaction_hash") @db.VarChar(70)
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  settings        Settings @relation(fields: [bakerId], references: [bakerId], onDelete: Cascade)
+
+  @@unique([bakerId, cycle, date, result])
+  @@index([cycle])
+  @@index([result])
+  @@index([bakerId, cycle])
+  @@map("payments")
+}
+
+model DelegatorPayment {
+  id              Int      @id @default(autoincrement())
+  bakerId         String   @map("baker_id") @db.VarChar(50)
+  cycle           Int
+  address         String   @db.VarChar(50)
+  date            DateTime @db.Date
+  result          String   @db.VarChar(20) // 'applied', 'simulated', 'failed', 'not available'
+  total           Decimal  @db.Decimal(20, 6)
+  transactionHash String?  @map("transaction_hash") @db.VarChar(70)
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([bakerId, cycle, address, date, result])
+  @@index([cycle])
+  @@index([address])
+  @@index([result])
+  @@index([bakerId, cycle])
+  @@map("delegators_payments")
+}
+
+model DelegatorFee {
+  bakerId   String   @map("baker_id") @db.VarChar(50)
+  address   String   @db.VarChar(50)
+  fee       Decimal  @db.Decimal(6, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  settings  Settings @relation(fields: [bakerId], references: [bakerId], onDelete: Cascade)
+
+  @@id([bakerId, address])
+  @@index([address])
+  @@map("delegators_fee")
+}
+
+model BondPoolSettings {
+  bakerId   String   @id @map("baker_id") @db.VarChar(50)
+  status    Boolean
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  settings  Settings @relation(fields: [bakerId], references: [bakerId], onDelete: Cascade)
+
+  @@map("bond_pool_settings")
+}
+
+model BondPoolMember {
+  bakerId    String   @map("baker_id") @db.VarChar(50)
+  address    String   @db.VarChar(50)
+  amount     Decimal  @db.Decimal(20, 2)
+  name       String?  @db.VarChar(50)
+  admCharge  Decimal  @map("adm_charge") @db.Decimal(20, 2)
+  isManager  Boolean? @map("is_manager")
+
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@id([bakerId, address])
+  @@map("bond_pool")
+}
