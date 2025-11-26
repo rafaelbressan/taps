@@ -1,0 +1,246 @@
+# Artillery Load Testing Configuration for TAPS Backend
+# Run with: artillery run test/load/artillery-config.yml
+
+config:
+  target: "http://localhost:3000"
+  phases:
+    # Warm-up phase
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm-up"
+
+    # Ramp-up phase
+    - duration: 120
+      arrivalRate: 5
+      rampTo: 50
+      name: "Ramp-up load"
+
+    # Sustained load phase
+    - duration: 300
+      arrivalRate: 50
+      name: "Sustained load"
+
+    # Spike test
+    - duration: 60
+      arrivalRate: 100
+      name: "Spike test"
+
+    # Cool-down
+    - duration: 60
+      arrivalRate: 10
+      name: "Cool-down"
+
+  # Environment variables
+  variables:
+    testBakerId: "tz1TestBaker123456789"
+    testUsername: "testbaker"
+    testPassword: "TestPassword123!"
+
+  # Performance thresholds
+  ensure:
+    maxErrorRate: 1           # Max 1% error rate
+    max: 2000                 # Max response time 2s
+    p95: 1000                 # 95th percentile under 1s
+    p99: 1500                 # 99th percentile under 1.5s
+
+  # HTTP settings
+  http:
+    timeout: 30
+    pool: 50                  # Max concurrent connections
+
+  # Plugins
+  plugins:
+    metrics-by-endpoint:
+      stripQueryString: true
+      ignoreUnknownEndpoints: false
+      metricsNamespace: "taps_api"
+
+# Test scenarios
+scenarios:
+  # Scenario 1: Authentication flow
+  - name: "Authentication Flow"
+    weight: 30
+    flow:
+      - post:
+          url: "/auth/login"
+          json:
+            username: "{{ testUsername }}"
+            password: "{{ testPassword }}"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+          expect:
+            - statusCode: 200
+            - contentType: json
+            - hasProperty: access_token
+
+      - get:
+          url: "/auth/me"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+      - think: 2
+
+      - post:
+          url: "/auth/logout"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+  # Scenario 2: Settings management
+  - name: "Settings Management"
+    weight: 25
+    flow:
+      # Login
+      - post:
+          url: "/auth/login"
+          json:
+            username: "{{ testUsername }}"
+            password: "{{ testPassword }}"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+
+      - think: 1
+
+      # Get settings
+      - get:
+          url: "/settings"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: baker_id
+
+      - think: 2
+
+      # Update settings
+      - patch:
+          url: "/settings"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          json:
+            defaultFee: 5.5
+            minPayment: 0.5
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Get system status
+      - get:
+          url: "/settings/status"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: mode
+
+  # Scenario 3: Payment history browsing
+  - name: "Payment History Browsing"
+    weight: 30
+    flow:
+      # Login
+      - post:
+          url: "/auth/login"
+          json:
+            username: "{{ testUsername }}"
+            password: "{{ testPassword }}"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+
+      - think: 1
+
+      # Get payment history page 1
+      - get:
+          url: "/payments/history?page=1&limit=20"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: data
+
+      - think: 3
+
+      # Get payment history page 2
+      - get:
+          url: "/payments/history?page=2&limit=20"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+      - think: 2
+
+      # Filter by status
+      - get:
+          url: "/payments/history?status=paid"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Get pending cycle
+      - get:
+          url: "/payments/pending"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: cycle
+
+  # Scenario 4: Job management
+  - name: "Job Management"
+    weight: 15
+    flow:
+      # Login
+      - post:
+          url: "/auth/login"
+          json:
+            username: "{{ testUsername }}"
+            password: "{{ testPassword }}"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+
+      - think: 1
+
+      # Get job status
+      - get:
+          url: "/jobs/status"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: cycleMonitoring
+
+      - think: 3
+
+      # Trigger cycle check
+      - post:
+          url: "/jobs/trigger/cycle-check"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 202
+
+      - think: 2
+
+      # Trigger balance poll
+      - post:
+          url: "/jobs/trigger/balance-poll"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 202
+
+# After test hook
+after:
+  flow:
+    - log: "Load test completed"
