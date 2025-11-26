@@ -1,24 +1,25 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { HELMET_CONFIG, CORS_CONFIG } from './config/security.config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const logger = new Logger('Bootstrap');
 
   // Get configuration
   const configService = app.get(ConfigService);
   const port = configService.get<number>('port', 3000);
 
-  // Security
-  app.use(helmet());
+  // Security - Helmet (HTTP headers protection)
+  app.use(helmet(HELMET_CONFIG));
+  logger.log('✓ Security headers configured (Helmet)');
 
-  // CORS
-  app.enableCors({
-    origin: process.env.NODE_ENV === 'production' ? false : true,
-    credentials: true,
-  });
+  // CORS - Cross-Origin Resource Sharing
+  app.enableCors(CORS_CONFIG);
+  logger.log('✓ CORS configured');
 
   // Global validation pipe
   app.useGlobalPipes(
