@@ -11,6 +11,14 @@ A regra, escrita para não se perder: **código pode viver em branch enquanto a 
 | [`spec/REGRAS-DE-NEGOCIO.md`](spec/REGRAS-DE-NEGOCIO.md) | As regras de negócio do TAPS extraídas do sistema original. O aproveitamento literal de código é próximo de zero; **o que sobrevive são as regras**, e elas estão aqui |
 | [`../ANALYSIS.md`](../ANALYSIS.md) | O que impede o sistema de rodar, os achados de segurança, e os de correção financeira — pagamento duplicado, precisão, constantes congeladas |
 | [`../migration-docs/`](../migration-docs/) | Documentação da migração ColdFusion → TypeScript. `BUSINESS_LOGIC.md` descreve o comportamento do sistema original |
+| [`tezos-network-facts.md`](tezos-network-facts.md) | O que a rede Tezos faz **hoje**, com a chamada que comprova cada número. Base factual da camada de cadeia |
+
+## Código
+
+| Diretório | O que é |
+|---|---|
+| [`../packages/tezos-chain/`](../packages/tezos-chain/) | `@tezos-suite/chain` — a camada de cadeia da suíte, compartilhada com o Tezzet. Especificada em SPEC-0002. Não importa nada do TAPS: extrair para repositório próprio é um `git mv` |
+| `../backend/` | O backend NestJS herdado. Não compila, e a reescrita passa por cima dele (ADR-0001 §6). A camada de cadeia dele é substituída pelo pacote acima |
 
 ## Documentos de suíte
 
@@ -20,6 +28,7 @@ Valem para o TAPS **e** para o Tezzet, e moram no repositório do **Tezzet**, ao
 |---|---|---|
 | ADR-0001 | Stack unificada da Suíte Tezos | `tezzet` → `docs/adr/0001-stack-unificada-tezzet-taps.md` |
 | SPEC-0001 | Núcleo criptográfico compartilhado (`tz-keys` + `tz-vault`) | `tezzet` → `docs/spec/0001-nucleo-criptografico-compartilhado.md` |
+| SPEC-0002 | Camada de cadeia (`@tezos-suite/chain`) | `tezzet` → `docs/spec/0002-camada-de-cadeia.md` |
 
 O que a SPEC-0001 decide especificamente para o TAPS está resumido em [`spec/README.md`](spec/README.md) — inclusive a custódia da chave de payout, que está **decidida**.
 

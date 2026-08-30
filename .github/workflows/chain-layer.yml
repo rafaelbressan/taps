@@ -1,0 +1,61 @@
+name: Chain layer
+
+on:
+  push:
+    paths: ['packages/tezos-chain/**', '.github/workflows/chain-layer.yml']
+  pull_request:
+    paths: ['packages/tezos-chain/**', '.github/workflows/chain-layer.yml']
+  schedule:
+    # The contract test is the only check that notices TzKT changing its
+    # response. It runs daily, and its failure is a real alert.
+    - cron: '17 5 * * *'
+
+defaults:
+  run:
+    working-directory: packages/tezos-chain
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: packages/tezos-chain/package-lock.json
+
+      - run: npm ci
+
+      # Fails on any protocol constant written into the source.
+      - name: No protocol constants in source
+        run: npm run check:constants
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  contract:
+    name: TzKT contract
+    runs-on: ubuntu-latest
+    # Never gates a pull request: a TzKT outage is not a code failure. It
+    # gates the release, and it is what tells us a field disappeared.
+    if: github.event_name == 'schedule' || github.event_name == 'push'
+    continue-on-error: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: packages/tezos-chain/package-lock.json
+
+      - run: npm ci
+
+      - name: Contract test against the real TzKT API
+        env:
+          TEZOS_NETWORK: mainnet
+          TEZOS_RPC_URL: https://rpc.tzbeta.net
+          TZKT_API_URL: https://api.tzkt.io
+        run: npm run test:contract
