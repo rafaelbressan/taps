@@ -24,7 +24,14 @@ import { Faucet } from './faucet.ts';
 import { buildCohort, generateEd25519, loadCohort, saveCohort, type Cohort } from './cohort.ts';
 import { mapLimit } from './chain/http.ts';
 
-export type SetupStage = 'accounts' | 'cohort' | 'fund' | 'baker' | 'delegate';
+export type SetupStage =
+  | 'accounts'
+  | 'cohort'
+  | 'fund'
+  | 'baker'
+  | 'delegate'
+  | 'staking-params'
+  | 'stake';
 
 export interface SetupOptions {
   stage: SetupStage;
@@ -48,6 +55,8 @@ export async function setup(cfg: HarnessConfig, opts: SetupOptions): Promise<Coh
   if (opts.stage === 'cohort') return setupCohort(cfg, rpc, opts);
   if (opts.stage === 'fund') return topUpBaker(cfg, rpc, opts);
   if (opts.stage === 'delegate') return delegateCohort(cfg, opts);
+  if (opts.stage === 'staking-params') return setStakingParameters(cfg, rpc, opts);
+  if (opts.stage === 'stake') return stakeWithBaker(cfg, rpc, opts);
   return setupBaker(cfg, rpc, opts);
 }
 
@@ -202,6 +211,112 @@ async function delegateCohort(cfg: HarnessConfig, opts: SetupOptions): Promise<C
   const failed = results.filter((r) => r.error);
   opts.log(`delegações: ${results.length - failed.length} ok, ${failed.length} com erro`);
   for (const f of failed.slice(0, 5)) opts.log(`  ${f.id}: ${f.error}`);
+  return cohort;
+}
+
+/**
+ * Abre o baker para stake externo.
+ *
+ * Por padrão um delegado nasce com `limit_of_staking_over_baking_millionth = 0` e edge
+ * de 100 % — ou seja, **ninguém pode stakear nele**. Sem isto o coorte nunca exercita
+ * Adaptive Issuance, e o caso que mais importa (os campos `*StakedShared`, que o
+ * protocolo já pagou e que pagar de novo é pagar em dobro) nunca aparece num split real.
+ *
+ * O Taquito 25 não expõe `setDelegateParameters`. Na cadeia isso é uma transação do
+ * delegado para si mesmo, valor 0, no pseudo-entrypoint `set_delegate_parameters`.
+ *
+ * Os parâmetros levam `delegate_parameters_activation_delay` ciclos para valer — 5, lido
+ * da cadeia. Por isso esta etapa é separada da etapa `stake`: adiar o ajuste só empurra
+ * a espera para a frente.
+ */
+async function setStakingParameters(
+  cfg: HarnessConfig,
+  rpc: RpcClient,
+  opts: SetupOptions,
+): Promise<Cohort> {
+  const cohort = await loadCohort(cfg.stateDir);
+  const constants = await rpc.constants();
+
+  const toolkit = new TezosToolkit(cfg.rpcUrl);
+  toolkit.setSignerProvider(new InMemorySigner(cohort.baker.secretKey));
+
+  // Valores realistas, copiados de um baker de mainnet (Everstake, BRES-38 §3.2):
+  // stake externo até 5× o próprio, edge de 15 %. `edge` é **billionth**: 15 % é
+  // 150 000 000, não 15. Ler como percentual dá 150 000 000 %.
+  const limitOfStakingOverBakingMillionth = 5_000_000;
+  const edgeOfBakingOverStakingBillionth = 150_000_000;
+
+  const op = await toolkit.contract.transfer({
+    to: cohort.baker.address,
+    amount: 0,
+    mutez: true,
+    parameter: {
+      entrypoint: 'set_delegate_parameters',
+      value: {
+        prim: 'Pair',
+        args: [
+          { int: String(limitOfStakingOverBakingMillionth) },
+          {
+            prim: 'Pair',
+            args: [{ int: String(edgeOfBakingOverStakingBillionth) }, { prim: 'Unit' }],
+          },
+        ],
+      },
+    },
+  });
+  await op.confirmation(2);
+
+  const delay = Number(constants['delegate_parameters_activation_delay'] ?? 0);
+  const cycleHours =
+    (constants.blocks_per_cycle * Number(constants.minimal_block_delay)) / 3600;
+  opts.log(`parâmetros de staking enviados: ${op.hash}`);
+  opts.log(
+    `limite de stake externo 5× o próprio, edge 15 % (150000000 billionth). ` +
+      `Valem daqui a delegate_parameters_activation_delay = ${delay} ciclos ` +
+      `(~${(delay * cycleHours).toFixed(0)} h nesta rede). Só depois disso a etapa \`stake\` funciona.`,
+  );
+  return cohort;
+}
+
+/**
+ * O membro `staker` do coorte delega e stakeia. Só funciona depois que os parâmetros
+ * de staking do baker estiverem ativos — antes disso a cadeia recusa, e a mensagem
+ * abaixo diz o porquê em vez de deixar o erro cru passar.
+ */
+async function stakeWithBaker(
+  cfg: HarnessConfig,
+  rpc: RpcClient,
+  opts: SetupOptions,
+): Promise<Cohort> {
+  const cohort = await loadCohort(cfg.stateDir);
+  const member = cohort.members.find((m) => m.role === 'staker');
+  if (!member?.secretKey) throw new Error('coorte sem membro `staker` com chave.');
+
+  const active = await rpc.stakingParameters(cohort.baker.address);
+  if (active.limit_of_staking_over_baking_millionth === 0) {
+    throw new Error(
+      `o baker ainda não aceita stake externo ` +
+        `(limit_of_staking_over_baking_millionth = 0). Rode \`--stage staking-params\` e ` +
+        `espere delegate_parameters_activation_delay ciclos.`,
+    );
+  }
+
+  const balance = await rpc.balance(member.address);
+  const amount = opts.seedMutez;
+  if (balance <= amount) {
+    throw new Error(`o staker tem ${balance} mutez, menos que os ${amount} que iria stakear.`);
+  }
+
+  const tk = new TezosToolkit(cfg.rpcUrl);
+  tk.setSignerProvider(new InMemorySigner(member.secretKey));
+
+  const del = await tk.contract.setDelegate({ source: member.address, delegate: cohort.baker.address });
+  await del.confirmation(1);
+  opts.log(`staker delegou ao baker: ${del.hash}`);
+
+  const st = await tk.contract.stake({ amount: Number(amount), mutez: true });
+  await st.confirmation(2);
+  opts.log(`staker stakeou ${amount} mutez: ${st.hash}`);
   return cohort;
 }
 

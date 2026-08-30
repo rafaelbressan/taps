@@ -135,6 +135,26 @@ export class RpcClient {
     return BigInt(body);
   }
 
+  /**
+   * Parâmetros de staking ativos do delegado. `edge_of_baking_over_staking_billionth`
+   * é **billionth**: divida por 1e9. Ler como percentual dá 150 000 000 %.
+   */
+  async stakingParameters(delegate: string): Promise<{
+    limit_of_staking_over_baking_millionth: number;
+    edge_of_baking_over_staking_billionth: number;
+  }> {
+    this.#requireVerified();
+    const { body } = await fetchJson<{
+      limit_of_staking_over_baking_millionth: number;
+      edge_of_baking_over_staking_billionth: number;
+    }>(
+      `${this.cfg.rpcUrl}/chains/main/blocks/head/context/delegates/${delegate}/active_staking_parameters`,
+      { timeoutMs: this.cfg.timeoutMs },
+    );
+    if (!body) throw new Error(`RPC não devolveu parâmetros de staking de ${delegate}.`);
+    return body;
+  }
+
   /** Hashes de operação de um nível — conferência sem depender do indexador. */
   async operationHashes(level: number): Promise<string[][]> {
     this.#requireVerified();

@@ -63,8 +63,8 @@ async function main(): Promise<number> {
 
     case 'setup': {
       const stage = (flag(argv, 'stage') ?? 'accounts') as SetupStage;
-      if (!['accounts', 'cohort', 'fund', 'baker', 'delegate'].includes(stage)) {
-        log('--stage precisa ser accounts, cohort, fund, baker ou delegate.');
+      if (!['accounts', 'cohort', 'fund', 'baker', 'delegate', 'staking-params', 'stake'].includes(stage)) {
+        log('--stage precisa ser accounts, cohort, fund, baker, delegate, staking-params ou stake.');
         return 2;
       }
       await setup(cfg, {

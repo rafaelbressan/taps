@@ -111,7 +111,17 @@ split sintético — o baker de testes ainda não fechou ciclos. Para ter um
 npm run setup -- --stage fund --fund 5000   # saca mais do faucet, se precisar
 npm run setup -- --stage baker              # registra o delegado e stakeia o mínimo
 npm run setup -- --stage delegate           # delega o coorte ao baker
+npm run setup -- --stage staking-params     # abre o baker para stake externo
+npm run setup -- --stage stake              # o membro `staker` delega e stakeia
 ```
+
+Rode `staking-params` **cedo**. Um delegado nasce com
+`limit_of_staking_over_baking_millionth = 0` e edge de 100 %: ninguém pode stakear nele,
+e sem staker o coorte nunca exercita Adaptive Issuance — os campos `*StakedShared`, que o
+protocolo já pagou e que pagar de novo é pagar em dobro, nunca aparecem num split real.
+Os parâmetros levam `delegate_parameters_activation_delay` ciclos para valer (5, lido da
+cadeia; ~30 h nesta rede), então adiar só empurra a espera. A etapa `stake` recusa com a
+razão escrita enquanto eles não estiverem ativos.
 
 Depois é espera de calendário, e não há como acelerar:
 
@@ -120,7 +130,8 @@ Depois é espera de calendário, e não há como acelerar:
 - distribuir só depois que N+2 começar, por causa da janela de denúncia;
 - em Bakingnet um ciclo é 3600 blocos × 6 s = **6 h**.
 
-Total: **~24 h** entre registrar o baker e ter um ciclo pagável. A partir daí:
+Total: **~24 h** entre registrar o baker e ter um ciclo pagável — e **~36 h** até haver
+stake externo, por causa do `delegate_parameters_activation_delay`. A partir daí:
 
 ```bash
 npm run run -- --split tzkt:<endereço-do-baker>/<ciclo>
