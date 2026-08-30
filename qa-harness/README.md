@@ -49,7 +49,13 @@ npm run run                          # distribuição real + reconciliação + i
 npm run run -- --dry-run             # só planeja; não injeta nada
 npm run selftest                     # prova que os cenários conseguem reprovar
 npm run selftest -- --plan-only      # só os mutantes que não movem dinheiro
+npm run selftest:offline             # idem, sem rede e sem baker provisionado
 ```
+
+`--offline` não faz uma única chamada de rede: coorte gerado em memória, taxa e gas de
+fixture gravada, nada injetado. Roda em segundos, sem chave e sem faucet — é o que o CI
+de PR executa. Ele **não prova nada sobre movimentação de dinheiro**: idempotência,
+conta não alocada e reconciliação exigem a cadeia.
 
 Código de saída 0 quando tudo passa, 1 quando algo reprova. Com `--sabotage` ligado a
 lógica se inverte: **passar** é a falha, porque o mutante deveria ter sido pego.
@@ -193,7 +199,7 @@ do split, não do motor.
 
 | job | quando roda | o que impõe |
 |---|---|---|
-| `harness-selftest` | todo push e PR | tipos + `selftest --plan-only`: os cenários conseguem reprovar |
+| `harness-selftest` | todo push e PR | tipos + `selftest --offline`: os cenários conseguem reprovar, sem rede nem chave |
 | `detect-app` | todo push e PR | existe `src-tauri/Cargo.toml`? |
 | `build` (linux, windows, android) | só quando `detect-app` diz que sim | os três alvos da ADR-0001 buildam |
 | `payout-bakingnet` | `workflow_dispatch` | rodada real: setup, distribuição, reconciliação, selftest completo |

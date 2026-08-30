@@ -19,7 +19,7 @@ import type {
   RewardSplit,
 } from './types.ts';
 import { Sabotage } from './sabotage.ts';
-import type { Batcher } from '../chain/batcher.ts';
+import type { PaymentSender } from './sender.ts';
 
 /** Regex do TAPS atual, reproduzida só para o mutante `tz4-rejected`. */
 const LEGACY_ADDRESS_RE = /^(tz1|tz2|tz3|KT1)[1-9A-HJ-NP-Za-km-z]{33}$/;
@@ -28,7 +28,7 @@ export class ReferenceEngine implements PayoutEngine {
   readonly name = 'reference';
 
   constructor(
-    private readonly batcher: Batcher,
+    private readonly sender: PaymentSender,
     private readonly sabotage = new Sabotage(),
   ) {}
 
@@ -119,12 +119,12 @@ export class ReferenceEngine implements PayoutEngine {
    * a taxa flutua com a demanda da rede.
    */
   #floorFor(d: { emptied: boolean }, policy: PayoutPolicy): bigint {
-    const transferCost = this.batcher.estimatedTransferCost(d.emptied);
+    const transferCost = this.sender.estimatedTransferCost(d.emptied);
     return policy.minPayoutFloor > transferCost ? policy.minPayoutFloor : transferCost;
   }
 
   async execute(plan: PayoutPlan): Promise<ExecutionResult> {
-    return this.batcher.send(plan);
+    return this.sender.send(plan);
   }
 }
 

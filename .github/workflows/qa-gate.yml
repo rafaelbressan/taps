@@ -54,11 +54,15 @@ jobs:
       - name: Tipos
         run: npm run typecheck
 
-      # `--plan-only` roda os mutantes que não precisam mover dinheiro. É o que cabe num
-      # CI de PR: sem chave, sem faucet, sem injeção. A rodada completa contra Bakingnet
-      # é o job `payout-bakingnet` abaixo, que exige coorte já provisionado.
-      - name: Selftest (mutantes de plano)
-        run: npm run selftest -- --plan-only
+      # `--offline` não faz uma única chamada de rede: coorte gerado em memória, taxa e
+      # gas de fixture gravada, nada injetado. É o que cabe num CI de PR — sem chave, sem
+      # faucet, sem baker provisionado — e ainda assim é um portão de verdade: os seis
+      # mutantes de plano reprovam aqui igual reprovam contra a cadeia.
+      #
+      # O que este job NÃO prova: nada sobre movimentação de dinheiro. Idempotência,
+      # conta não alocada e reconciliação exigem a cadeia, e ficam no `payout-bakingnet`.
+      - name: Selftest (mutantes de plano, sem rede)
+        run: npm run selftest -- --offline
 
   # Descobre se já existe app para buildar. Precisa ser um job com checkout: `hashFiles()`
   # num `if` de job roda ANTES do checkout, sobre um workspace vazio, e devolveria sempre

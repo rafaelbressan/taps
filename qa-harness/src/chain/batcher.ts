@@ -9,6 +9,7 @@ import type { RpcClient, ProtocolConstants } from './rpc.ts';
 import type { TzktClient } from './tzkt.ts';
 import { Journal } from './journal.ts';
 import { Sabotage } from '../payout/sabotage.ts';
+import type { PaymentSender } from '../payout/sender.ts';
 
 export interface BatcherDeps {
   cfg: HarnessConfig;
@@ -34,7 +35,7 @@ interface EstimatedPayment {
   storageLimit: number;
 }
 
-export class Batcher {
+export class Batcher implements PaymentSender {
   private readonly sabotage: Sabotage;
   /** Custo medido de uma transferência nesta rede, preenchido por `calibrate()`. */
   private transferFee = 0n;

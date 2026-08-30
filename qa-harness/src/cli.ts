@@ -84,6 +84,7 @@ async function main(): Promise<number> {
         cycle: Number(flag(argv, 'cycle') ?? Math.floor(Date.now() / 1000)),
         mutants,
         dryRun: has(argv, 'dry-run'),
+        offline: has(argv, 'offline'),
         log,
       });
       process.stdout.write(renderReport(report));
@@ -101,6 +102,7 @@ async function main(): Promise<number> {
         poolMutez: BigInt(flag(argv, 'pool') ?? '400000000'),
         baseCycle: Number(flag(argv, 'cycle') ?? Math.floor(Date.now() / 1000)),
         planOnly: has(argv, 'plan-only'),
+        offline: has(argv, 'offline'),
         log,
       });
       process.stdout.write(renderSelftest(report));
@@ -121,6 +123,7 @@ async function main(): Promise<number> {
           '  setup [--stage accounts|baker] [--fund <XTZ>]',
           '  run [--dry-run] [--pool <mutez>] [--split tzkt:<baker>/<cycle>] [--sabotage <m1,m2>]',
           '  selftest [--plan-only]       prova que os cenários conseguem reprovar',
+          '  selftest --offline           idem, sem rede e sem baker provisionado (é o que roda no CI)',
           '',
           'Mutantes disponíveis:',
           ...Object.entries(MUTANTS).map(([k, v]) => `  ${k.padEnd(22)} ${v.label}`),

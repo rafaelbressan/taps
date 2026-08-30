@@ -13,12 +13,13 @@ import { RpcClient } from './chain/rpc.ts';
 import { TzktClient } from './chain/tzkt.ts';
 import { Journal } from './chain/journal.ts';
 import { Batcher } from './chain/batcher.ts';
-import { reconcile } from './chain/reconcile.ts';
+import { reconcile, type Reconciliation } from './chain/reconcile.ts';
 import { ReferenceEngine } from './payout/reference-engine.ts';
 import { Sabotage, type MutantName } from './payout/sabotage.ts';
 import { syntheticSplit, tuneDustBalance, tzktSplit } from './payout/split-source.ts';
 import type { PayoutPolicy, RewardSplit } from './payout/types.ts';
-import { loadCohort, refreshCohort, saveCohort } from './cohort.ts';
+import { buildCohort, generateEd25519, loadCohort, refreshCohort, saveCohort, type Cohort } from './cohort.ts';
+import { OFFLINE_FIXTURE, OfflineSender, type PaymentSender } from './payout/sender.ts';
 import { SCENARIOS, type ScenarioContext, type ScenarioResult } from './scenarios.ts';
 
 export interface RunOptions {
@@ -28,6 +29,11 @@ export interface RunOptions {
   mutants: MutantName[];
   /** Não injeta nada; só planeja e roda os cenários que não dependem da cadeia. */
   dryRun: boolean;
+  /**
+   * Sem rede nenhuma: coorte gerado em memória, taxa e gas vindos de fixture gravada.
+   * É o que roda num CI de PR — sem chave, sem faucet, sem baker provisionado.
+   */
+  offline: boolean;
   log: (msg: string) => void;
 }
 
@@ -38,6 +44,8 @@ export interface RunReport {
   baker: string;
   mutants: MutantName[];
   dryRun: boolean;
+  /** Rodada sem rede: taxa e gas vieram de fixture, e nada foi injetado. */
+  offline: boolean;
   calibration: { transferFeeMutez: string; gasPerTransfer: string; allocationBurnMutez: string };
   plan: {
     cycle: number;
@@ -62,8 +70,25 @@ export interface RunReport {
   passed: boolean;
 }
 
-export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunReport> {
-  const startedAt = new Date().toISOString();
+
+/** O que `run` precisa ter em mãos, venha de onde vier. */
+interface Wiring {
+  cohort: Cohort;
+  network: RunReport['network'];
+  sender: PaymentSender;
+  fee: bigint;
+  allocationBurn: bigint;
+  gasPerTransfer: bigint;
+  /** Ausente no modo offline: sem cadeia, não há o que reconciliar. */
+  chain?: { rpc: RpcClient; tzkt: TzktClient };
+}
+
+/** Caminho normal: trava de rede, constantes lidas da cadeia, calibração na rede. */
+async function wireBakingnet(
+  cfg: HarnessConfig,
+  sabotage: Sabotage,
+  opts: RunOptions,
+): Promise<Wiring> {
   const rpc = new RpcClient(cfg);
   const tzkt = new TzktClient(cfg);
 
@@ -79,6 +104,7 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     await saveCohort(cfg.stateDir, cohort);
     opts.log(`endereços de borda renovados: ${rotated.join(', ')}`);
   }
+
   const constants = await rpc.constants();
   opts.log(
     `constantes lidas da cadeia: blocks_per_cycle=${constants.blocks_per_cycle}, ` +
@@ -89,17 +115,13 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
   const toolkit = new TezosToolkit(cfg.rpcUrl);
   toolkit.setSignerProvider(new InMemorySigner(cohort.baker.secretKey));
 
-  const journal = new Journal(join(cfg.stateDir, 'journal'));
-  const sabotage = new Sabotage(opts.mutants);
-  if (!sabotage.isClean) opts.log(`MUTANTES ATIVOS: ${sabotage.names.join(', ')}`);
-
   const batcher = new Batcher({
     cfg,
     toolkit,
     rpc,
     tzkt,
     constants,
-    journal,
+    journal: new Journal(join(cfg.stateDir, 'journal')),
     bakerAddress: cohort.baker.address,
     sabotage,
   });
@@ -112,8 +134,73 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
       `burn de alocação ${allocationBurn} mutez (origination_size × cost_per_byte, da cadeia)`,
   );
 
+  return {
+    cohort,
+    network: { chainId, level: head.level, cycle: head.cycle, protocol: head.protocol },
+    sender: batcher,
+    fee,
+    allocationBurn,
+    gasPerTransfer: batcher.gasPerTransfer,
+    chain: { rpc, tzkt },
+  };
+}
+
+/**
+ * Caminho offline: nenhuma chamada de rede, nenhuma chave provisionada.
+ *
+ * Roda os cenários que dependem só do plano — aritmética, completude da lista, tz4,
+ * poeira, staker — e os mutantes que eles pegam. É o que cabe num CI de PR, e é um
+ * portão de verdade: os mutantes reprovam aqui igual reprovam contra a cadeia.
+ *
+ * O que ele NÃO prova: nada sobre movimentação de dinheiro. Idempotência, conta não
+ * alocada e reconciliação exigem a cadeia, e continuam exigindo.
+ */
+async function wireOffline(opts: RunOptions): Promise<Wiring> {
+  const baker = await generateEd25519();
+  const cohort = await buildCohort(baker.secretKey);
+  opts.log(
+    `modo offline: coorte de ${cohort.members.length} membros gerado em memória; ` +
+      `taxa ${OFFLINE_FIXTURE.transferFeeMutez} e gas ${OFFLINE_FIXTURE.gasPerTransfer} vêm de ` +
+      `fixture medida em ${OFFLINE_FIXTURE.network} em ${OFFLINE_FIXTURE.measuredAt} — não da rede.`,
+  );
+
+  return {
+    cohort,
+    network: { chainId: '(offline)', level: 0, cycle: 0, protocol: '(offline)' },
+    sender: new OfflineSender(),
+    fee: OFFLINE_FIXTURE.transferFeeMutez,
+    allocationBurn: OFFLINE_FIXTURE.allocationBurnMutez,
+    gasPerTransfer: OFFLINE_FIXTURE.gasPerTransfer,
+  };
+}
+
+function emptyReconciliation(): Reconciliation {
+  return {
+    ok: true,
+    mismatches: [],
+    unexpected: [],
+    missing: [],
+    intendedTotal: 0n,
+    onChainTotal: 0n,
+    feesPaid: 0n,
+    allocationFeesPaid: 0n,
+    hashesVerifiedOnRpc: [],
+    notes: [],
+  };
+}
+
+export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunReport> {
+  const startedAt = new Date().toISOString();
+  const sabotage = new Sabotage(opts.mutants);
+  if (!sabotage.isClean) opts.log(`MUTANTES ATIVOS: ${sabotage.names.join(', ')}`);
+
+  const wired = opts.offline
+    ? await wireOffline(opts)
+    : await wireBakingnet(cfg, sabotage, opts);
+  const { cohort, network, sender, fee, allocationBurn, gasPerTransfer } = wired;
+
   const split = await resolveSplit(cfg, cohort, opts);
-  const carryOver = await loadCarryOver(cfg.stateDir);
+  const carryOver = opts.offline ? new Map<string, bigint>() : await loadCarryOver(cfg.stateDir);
 
   // O alvo de poeira sai da taxa medida agora, não de uma constante — e desconta o que
   // já está acumulado, senão o saldo herdado empurra o membro para cima do piso e o
@@ -133,13 +220,16 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     carryOver,
   };
 
-  const engine = new ReferenceEngine(batcher, sabotage);
+  const engine = new ReferenceEngine(sender, sabotage);
   const plan = engine.plan(split, policy);
 
   // A outra metade da regra de poeira: acumular sem nunca pagar é o mesmo que não pagar.
   // Replaneja com o saldo do membro de poeira já acima do piso e confere que ele é pago
   // e que o acumulado zera. Custa um replanejamento puro, nenhuma chamada de rede.
   const dustAccumulation = simulateDustPayout(engine, split, policy, cohort, fee, allocationBurn);
+
+  // Offline não move dinheiro: os cenários de cadeia ficam de fora, como no ensaio.
+  const noChain = opts.dryRun || opts.offline;
   const recipients = plan.payments.filter((p) => p.amount > 0n).length;
   opts.log(
     `plano: ${recipients} a pagar, ${plan.payments.length - recipients} abaixo do piso, ` +
@@ -150,7 +240,7 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
   let secondRun = { injected: [], skipped: [] } as typeof execution;
   let crashResume = { injected: 0, refused: false, message: 'não executado (dry-run)' };
 
-  if (!opts.dryRun) {
+  if (!noChain) {
     opts.log('executando a distribuição na cadeia...');
     execution = await engine.execute(plan);
     opts.log(`injetado: ${execution.injected.map((r) => r.opHash).join(', ') || '(nada)'}`);
@@ -162,15 +252,17 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     crashResume = await simulateCrashResume(cfg, engine, plan, opts.log);
   }
 
-  const reconciliation = await reconcile(plan, execution, {
-    rpc,
-    tzkt,
-    bakerAddress: cohort.baker.address,
-  });
+  const reconciliation = wired.chain
+    ? await reconcile(plan, execution, {
+        rpc: wired.chain.rpc,
+        tzkt: wired.chain.tzkt,
+        bakerAddress: cohort.baker.address,
+      })
+    : emptyReconciliation();
 
   const ctx: ScenarioContext = {
     dustAccumulation,
-    dryRun: opts.dryRun,
+    dryRun: noChain,
     cohort,
     split,
     policy,
@@ -191,7 +283,7 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     'acima-de-100-delegadores',
   ]);
 
-  const scenarios = SCENARIOS.filter((s) => !(opts.dryRun && chainScenarios.has(s.name))).map((s) => {
+  const scenarios = SCENARIOS.filter((s) => !(noChain && chainScenarios.has(s.name))).map((s) => {
     try {
       return s.check(ctx);
     } catch (err) {
@@ -199,18 +291,19 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     }
   });
 
-  await saveCarryOver(cfg.stateDir, plan);
+  if (!opts.offline) await saveCarryOver(cfg.stateDir, plan);
 
   return {
     startedAt,
     finishedAt: new Date().toISOString(),
-    network: { chainId, level: head.level, cycle: head.cycle, protocol: head.protocol },
+    network,
     baker: cohort.baker.address,
     mutants: opts.mutants,
-    dryRun: opts.dryRun,
+    dryRun: noChain,
+    offline: opts.offline,
     calibration: {
       transferFeeMutez: fee.toString(),
-      gasPerTransfer: batcher.gasPerTransfer.toString(),
+      gasPerTransfer: gasPerTransfer.toString(),
       allocationBurnMutez: allocationBurn.toString(),
     },
     plan: {

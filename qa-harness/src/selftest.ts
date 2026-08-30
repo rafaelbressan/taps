@@ -48,12 +48,17 @@ export interface SelftestOptions {
   baseCycle: number;
   /** Pula os mutantes que exigem injeção real. Mais rápido, prova menos. */
   planOnly: boolean;
+  /** Sem rede nenhuma: coorte em memória, taxa de fixture. Implica `planOnly`. */
+  offline: boolean;
   log: (msg: string) => void;
 }
 
 export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promise<SelftestReport> {
   const verdicts: MutantVerdict[] = [];
   let cycle = opts.baseCycle;
+  // Offline não tem cadeia; os mutantes que só aparecem quando o dinheiro se move ficam
+  // de fora, e o relatório diz quais cenários não foram exercitados por isso.
+  const planOnly = opts.planOnly || opts.offline;
 
   // Linha de base: sem mutante, tudo tem que passar. Se a base reprova, os veredictos
   // dos mutantes não significam nada — estariam reprovando pelo motivo errado.
@@ -62,7 +67,8 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
     split: `synthetic:${opts.poolMutez}`,
     cycle: cycle++,
     mutants: [],
-    dryRun: opts.planOnly,
+    dryRun: planOnly,
+    offline: opts.offline,
     log: (m) => opts.log(`  ${m}`),
   });
   const baselineFailed = baseline.scenarios.filter((s) => !s.ok).map((s) => s.name);
@@ -77,7 +83,7 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
   }
 
   const names = (Object.keys(MUTANTS) as MutantName[]).filter(
-    (m) => !opts.planOnly || !CHAIN_MUTANTS.includes(m),
+    (m) => !planOnly || !CHAIN_MUTANTS.includes(m),
   );
 
   for (const mutant of names) {
@@ -90,7 +96,8 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
         split: `synthetic:${opts.poolMutez}`,
         cycle: cycle++,
         mutants: [mutant],
-        dryRun: opts.planOnly || !CHAIN_MUTANTS.includes(mutant),
+        dryRun: planOnly || !CHAIN_MUTANTS.includes(mutant),
+        offline: opts.offline,
         log: () => {},
       });
     } catch (err) {
@@ -120,7 +127,7 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
   }
 
   const exercised = new Set(verdicts.flatMap((v) => v.failedScenarios));
-  const considered = opts.planOnly
+  const considered = planOnly
     ? SCENARIOS.filter((s) => s.catches.every((m) => !CHAIN_MUTANTS.includes(m)))
     : SCENARIOS;
   const scenariosNeverExercised = considered.filter((s) => !exercised.has(s.name)).map((s) => s.name);

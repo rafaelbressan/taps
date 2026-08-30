@@ -15,10 +15,21 @@ export function renderReport(r: RunReport, useColor = process.stdout.isTTY): str
   const L: string[] = [];
 
   L.push('');
-  L.push(c(BOLD, `Harness de payout — ${r.dryRun ? 'ensaio (nada injetado)' : 'execução na cadeia'}`));
+  const mode = r.offline ? 'offline (sem rede)' : r.dryRun ? 'ensaio (nada injetado)' : 'execução na cadeia';
+  L.push(c(BOLD, `Harness de payout — ${mode}`));
   L.push(
-    c(DIM, `bakingnet ${r.network.chainId} · ciclo ${r.network.cycle} · nível ${r.network.level} · baker ${r.baker}`),
+    c(
+      DIM,
+      r.offline
+        ? `sem cadeia · coorte em memória · baker ${r.baker}`
+        : `bakingnet ${r.network.chainId} · ciclo ${r.network.cycle} · nível ${r.network.level} · baker ${r.baker}`,
+    ),
   );
+  if (r.offline) {
+    L.push(
+      c(DIM, '  taxa e gas vêm de fixture gravada, não da rede; nada aqui prova movimentação de dinheiro.'),
+    );
+  }
   if (r.mutants.length > 0) {
     L.push(c(RED, `mutantes ativos: ${r.mutants.join(', ')} — esta rodada DEVE reprovar`));
   }

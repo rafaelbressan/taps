@@ -14,7 +14,8 @@
     "setup": "tsx src/cli.ts setup",
     "run": "tsx src/cli.ts run",
     "selftest": "tsx src/cli.ts selftest",
-    "doctor": "tsx src/cli.ts doctor"
+    "doctor": "tsx src/cli.ts doctor",
+    "selftest:offline": "tsx src/cli.ts selftest --offline"
   },
   "dependencies": {
     "@taquito/signer": "^25.0.0",
