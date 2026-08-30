@@ -1,7 +1,11 @@
 # Tezos hoje — levantamento com evidência de rede
 
-Levantamento executado em **2026-08-29** (UTC). Todo número aqui foi lido da rede, não de documentação.
-Cada afirmação traz a chamada que a comprova.
+Levantamento executado em **2026-08-29**, revisado em **2026-08-30** (UTC). Todo número aqui foi
+lido da rede, não de documentação. Cada afirmação traz a chamada que a comprova.
+
+Revisão de 2026-08-30: taxa e tamanho de batch remedidos sobre uma amostra 34× maior, o que
+corrigiu três números (§3.6, §5.1, §5.3); e a decisão de valor mínimo de pagamento foi registrada
+no §3.6.
 
 > **Isto é um retrato, não uma tabela de constantes.** Os valores mudam a cada upgrade de
 > protocolo. O que é permanente é *de onde ler*, não *o que está escrito*.
@@ -463,24 +467,48 @@ Três maiores delegadores:
 | `tz1Pp56sn9r2jNwN9YwwvTYWHmrpfqeHUFgj` | 26 756 730 648 | 1 509 539 mutez |
 | `tz1a4XMNsQgtw5i5PJ2ifQ9wWWJ6cbdEPLsx` | 26 004 049 076 | 1 467 075 mutez |
 
-### 3.6 Valor mínimo de pagamento — a conta que decide
+### 3.6 Valor mínimo de pagamento — decidido
 
-Custo real de uma transferência hoje (§5): **≈545 mutez** de taxa, mais **64 250 mutez** de burn
-se a conta de destino não estiver alocada.
+Custo real de uma transferência, medido sobre 5957 transferências tz→tz de mainnet em
+2026-08-30: **mediana 477 mutez, média 543, p90 554**. Mais **64 250 mutez** de burn se a conta
+de destino não estiver alocada.
 
-Mesmo ciclo, mesmo baker:
+> Uma amostra menor (200 transações, 2026-08-29) deu média 545. A taxa **flutua com a demanda da
+> rede** — o que reforça a regra: o mínimo é derivado da taxa estimada na hora, não escrito no código.
 
-| corte | delegadores pagos | taxa total | % do pool | não distribuído |
+Bake Nug, ciclo 1336, pool pagável 28 057 420 mutez para 2919 delegadores, taxa 477:
+
+| corte | delegadores pagos | taxa total | % do pool | acumula p/ próximo ciclo |
 |---:|---:|---:|---:|---:|
-| 0 (todos) | 2645 | 1 441 525 | 5,14 % | 1 374 |
-| 545 (= 1 taxa) | 1028 | 560 260 | 2,00 % | 158 452 |
-| 5 450 | 382 | 208 190 | 0,74 % | 1 425 046 |
-| 100 000 (0,1 XTZ) | 46 | 25 070 | 0,09 % | 9 618 295 |
+| 0 (sem mínimo) | 2645 | 1 261 665 | 4,50 % | 1 374 |
+| **477 (= 1 taxa)** | **1069** | **509 913** | **1,82 %** | **137 552** |
+| 4 770 (10 taxas) | 407 | 194 139 | 0,69 % | 1 295 749 |
+| 100 000 (0,1 XTZ) | 46 | 21 942 | 0,08 % | 9 618 295 |
 
-**2092 dos 2919 delegadores (72 %) receberiam menos do que custa mandar o pagamento.**
-274 recebem exatamente 0. Sem valor mínimo, 5,14 % do pool vira taxa. Com corte em uma taxa,
-2,00 %. O corte é decisão de política — mas ele **precisa existir**, e o saldo não pago precisa
-acumular para o ciclo seguinte, não sumir.
+**1850 dos 2919 delegadores (63 %) receberiam um valor menor ou igual ao que custa pagá-los**
+(1891, ou 65 %, com a taxa de 543). 274 recebem exatamente 0.
+
+#### Decisão — Rafael, 2026-08-30: opção A
+
+**O mínimo é uma taxa de rede**, e o saldo abaixo do corte **acumula para o ciclo seguinte**.
+
+Implementação correta, coerente com a regra do §1.4 — o valor **não é 477**:
+
+```
+minimo_i = fee estimada para ESTA transferência, vinda de estimate.batch(), na hora da distribuição
+           (+ 64 250 se o destino estiver `emptied` ou não alocado)
+
+se valor[d] <= minimo_d:
+    não paga neste ciclo; valor[d] acumula no saldo pendente do delegador
+senão:
+    entra no batch
+```
+
+Escrever `MIN_PAYOUT = 477` repete exatamente o erro que este documento inteiro documenta.
+Configurável por baker: um baker pode querer um piso mais alto que a taxa; nunca mais baixo.
+
+O saldo acumulado é dívida com o delegador — precisa persistir entre ciclos, entrar no cálculo do
+ciclo seguinte, e aparecer no extrato. Acumular e nunca pagar é o mesmo que não pagar.
 
 ### 3.7 Quando a recompensa do ciclo fica pronta
 
@@ -571,14 +599,14 @@ Simulação contra mainnet (`simulate_operation`, sem injetar nada):
 | destino **não alocado** | 257 | **applied** | 2 168 821 |
 | destino **tz4** não alocado | 300 | **applied** | 2 168 788 |
 
-Amostra de 200 transações reais recentes: `gasUsed` de transferência tz→tz é
-**2100 / 2101 / 2155 / 2169**. `bakerFee` observada: 0 a 1420 mutez, típica 500–650.
-Batches de payout reais em mainnet (60–68 operações) mostram **média 545 mutez/transferência**.
+Amostra de **6736 transferências tz→tz** de mainnet (2026-08-30): `gasUsed` é
+**2101** na mediana (2100 / 2101 / 2155 / 2169 cobrem quase tudo). `bakerFee`:
+**mediana 477 mutez, média 543, p90 554**.
 
 | valor no TAPS | valor real | fator |
 |---|---|---|
-| `DEFAULT_GAS_LIMIT = 15400` | ~2169 | **7,1× a mais** |
-| `DEFAULT_TRANSACTION_FEE = 0.0018` XTZ = 1800 mutez | ~545 | **3,3× a mais** |
+| `DEFAULT_GAS_LIMIT = 15400` | 2101 mediana / 2169 simulado | **7,1–7,3× a mais** |
+| `DEFAULT_TRANSACTION_FEE = 0.0018` XTZ = 1800 mutez | 477 mediana / 543 média | **3,3–3,8× a mais** |
 
 Gas superdimensionado não é só caro: ele **encolhe o batch**, porque o limite é por bloco (§5.3).
 
@@ -627,9 +655,22 @@ Com o gas real de 2169:
 | 2 500 (estimado + margem) | 416 |
 
 Segundo teto: `max_operation_data_length = 32 768` bytes por operação.
-Terceiro: `MAX_BATCH_SIZE = 100` no TAPS — razoável, mas os batches reais de mainnet ficam em
-**60–68 operações**, o que também é uma boa referência. Um batch de 479 consumiria o bloco inteiro
-e competiria com todo o resto da rede.
+Terceiro: `MAX_BATCH_SIZE = 100` no TAPS.
+
+E batches grandes **são prática corrente em mainnet**, não hipótese. Maior encontrado na amostra
+de 2026-08-30:
+
+```
+oo4nkZaiPejCHsk5VNXna9kGHpeygeQvp9Xnevq9o1L4bmtci8V
+  448 operações | gas total 942 145 | 90,6 % do hard_gas_limit_per_block | 477 mutez/transferência
+```
+
+Tamanhos observados: 448 (×6), 365 (×4), 312, 236, 120. Ou seja, `MAX_BATCH_SIZE = 100` não é
+perigoso — é **conservador demais**: um baker com 2919 delegadores faria 30 batches onde 7
+bastariam, multiplicando por 4 as janelas em que uma falha parcial pode acontecer.
+
+O teto real é o gas do bloco, e ele só é conhecido depois da estimativa. Dimensione o batch pelo
+gas estimado acumulado, não por uma contagem fixa de operações.
 
 **Regra:** uma chamada `estimate.batch()`, use `gasLimit`/`storageLimit`/`fee` que ela devolver,
 some e valide contra `hard_gas_limit_per_block` lido da cadeia. Se estourar, divida.
@@ -784,8 +825,8 @@ está inteiramente no código que a usa.
 |---|---|---|---|
 | 1 | `BLOCKS_PER_CYCLE = 4096` | 14400 (mainnet/Shadownet), **3600** (Bakingnet) | toda janela de ciclo errada; erra por 4× no próprio testnet |
 | 2 | `CYCLES_UNTIL_DELIVERED = 5` | recompensa creditada no **último bloco do ciclo N** | paga ~5 dias tarde |
-| 3 | `DEFAULT_GAS_LIMIT = 15400` | ~2169 medido | 7,1× a mais; encolhe o batch de 416 para 67 |
-| 4 | `DEFAULT_TRANSACTION_FEE = 0.0018` XTZ | ~545 mutez medido | 3,3× a mais, todo pagamento |
+| 3 | `DEFAULT_GAS_LIMIT = 15400` | 2101 mediana medida | 7,3× a mais; encolhe o batch de ~460 para 67 |
+| 4 | `DEFAULT_TRANSACTION_FEE = 0.0018` XTZ | 477 mutez mediana medida | 3,8× a mais, todo pagamento |
 | 5 | `DEFAULT_CONFIRMATION_BLOCKS = 8` | finalidade em 2 blocos + releitura | espera inútil; e contar blocos não é o teste certo |
 | 6 | `constants.time_between_blocks.map(...)` | campo **removido** | `TypeError` — `getConstants()` não roda |
 | 7 | `constants.endorsers_per_block` | campo **removido** | `undefined` |
@@ -799,8 +840,9 @@ está inteiramente no código que a usa.
 | 15 | `storageLimit: 0` fixo no batch | conta nova exige 257 | **um destinatário derruba o batch inteiro** (provado) |
 | 16 | `tezToMutez` com `Math.floor(tez*1e6)` | — | 1,15 % dos valores perdem 1 mutez, sempre para baixo |
 | 17 | ignora `staked_balance` / `edge` | dois saldos, dois regimes | `*StakedShared` já foi pago pelo protocolo — pagar = pagar em dobro |
-| 18 | sem valor mínimo de pagamento | taxa 545 mutez/destinatário | 72 % dos delegadores recebem menos do que custa pagá-los |
+| 18 | sem valor mínimo de pagamento | taxa mediana 477 mutez/destinatário | 63 % dos delegadores recebem ≤ o custo de pagá-los — ver decisão no §3.6 |
 | 19 | sem checagem de saldo antes do batch | — | batch falha no meio |
+| 23 | `MAX_BATCH_SIZE = 100` | batches de 448 ops rodam em mainnet (90,6 % do gas do bloco) | conservador demais: 30 batches onde 7 bastam |
 | 20 | `@@unique([bakerId, cycle, date, result])` | — | permite duplicar o mesmo ciclo |
 | 21 | retry reenvia sem consultar `opHash`; `clearPreviousAttempt()` apaga o registro | `max_operations_time_to_live = 600` blocos = 1 h | pagamento duplicado; e apaga a única prova |
 | 22 | sem tratar 429 | 429 do nginx, corpo **HTML**, sem `Retry-After` | `JSON.parse` quebra com erro errado |
@@ -828,13 +870,14 @@ está inteiramente no código que a usa.
 - [ ] Distribuir **apenas** `Σ(*Delegated)`. Nunca `*StakedShared`, `*StakedOwn`, `*StakedEdge`.
 - [ ] Taxa como racional inteiro (`num/den`), nunca float.
 - [ ] Rateio com floor; sobra fica com o baker; invariante da §3.4 fecha em teste.
-- [ ] Valor mínimo de pagamento configurável; saldo abaixo do corte acumula para o ciclo seguinte.
+- [ ] **Valor mínimo = taxa estimada da própria transferência** (decisão A, §3.6), configurável por baker, nunca uma constante no código; saldo abaixo do corte acumula para o ciclo seguinte e persiste entre ciclos.
 - [ ] Distribuir o ciclo N só depois que N+2 começar (janela de denúncia), relendo o split.
 
 **Batch**
 - [ ] Uma chamada `estimate.batch()`; usar `gasLimit`/`storageLimit`/`fee` retornados.
 - [ ] `storage_limit` nunca fixo em 0; contas `emptied`/novas precisam de ≥ 257.
 - [ ] Validar `Σ gas_limit <= hard_gas_limit_per_block` lido da cadeia; dividir se estourar.
+- [ ] Dimensionar o batch pelo gas estimado acumulado, não por contagem fixa de operações.
 - [ ] Verificar saldo do baker ≥ Σ valores + Σ taxas + burns antes de assinar.
 - [ ] Registrar qual lote já foi enviado, com `opHash`, antes de mandar o próximo.
 
