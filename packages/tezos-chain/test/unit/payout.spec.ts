@@ -124,13 +124,37 @@ describe('minimum payout and carry-over', () => {
     expect(plan.totalToSend + deferredTotal).toBe(distributed);
     expect(deferredTotal).toBe(136_178n);
 
-    // The network survey's §3.6 table reports 137 552 accumulating at this
-    // cut. The difference is not in the split: that column adds the rounding
-    // remainder to the deferred amounts, and it was computed with a payable
-    // of 28 057 420 — one mutez below the 28 057 421 that §3.5 derives and
-    // that the chain data reproduces. §3.4 is the rule followed here: the
-    // remainder stays with the baker, so it is not delegator debt.
-    expect(deferredTotal + plan.remainder).toBe(137_553n);
+    // The rounding remainder stays with the baker (§3.4), so it is not part
+    // of what accumulates: nobody is owed it.
+    expect(plan.remainder).toBe(1_375n);
+  });
+
+  it('reproduces every row of the survey table in §3.6', () => {
+    // Each cut is a policy a baker could pick. The table is a regression test
+    // now, so a change in the arithmetic shows up against the document.
+    const rows = [
+      { cut: 0n, paid: 2645, accumulated: 0n },
+      { cut: 477n, paid: 1069, accumulated: 136_178n },
+      { cut: 4_770n, paid: 407, accumulated: 1_294_375n },
+      { cut: 100_000n, paid: 46, accumulated: 9_616_921n },
+    ];
+
+    for (const row of rows) {
+      const plan = computePayout({
+        split: SPLIT,
+        fee: feeRate(10n, 100n),
+        minimumPayout: () => row.cut,
+      });
+      expect({ cut: row.cut, paid: plan.toPay.length }).toEqual({
+        cut: row.cut,
+        paid: row.paid,
+      });
+      const accumulated = [...carryOutOf(plan).values()].reduce((sum, v) => sum + v, 0n);
+      expect({ cut: row.cut, accumulated }).toEqual({
+        cut: row.cut,
+        accumulated: row.accumulated,
+      });
+    }
   });
 
   it('pays a delegator whose carried balance finally clears the minimum', () => {

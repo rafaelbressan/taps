@@ -7,6 +7,12 @@ Revisão de 2026-08-30: taxa e tamanho de batch remedidos sobre uma amostra 34×
 corrigiu três números (§3.6, §5.1, §5.3); e a decisão de valor mínimo de pagamento foi registrada
 no §3.6.
 
+Segunda revisão de 2026-08-30, durante a implementação (BRES-42): a tabela do §3.6 usava um
+pagável de 28 057 420 — um mutez abaixo do 28 057 421 que o §3.5 deriva e que a cadeia
+reproduz — e somava a sobra de arredondamento à coluna de acúmulo, contra a regra do §3.4.
+Cinco números corrigidos, todos no §3.6. Nenhuma conclusão muda: os cortes, as contagens de
+delegadores pagos e os percentuais continuam os mesmos.
+
 > **Isto é um retrato, não uma tabela de constantes.** Os valores mudam a cada upgrade de
 > protocolo. O que é permanente é *de onde ler*, não *o que está escrito*.
 
@@ -476,17 +482,21 @@ de destino não estiver alocada.
 > Uma amostra menor (200 transações, 2026-08-29) deu média 545. A taxa **flutua com a demanda da
 > rede** — o que reforça a regra: o mínimo é derivado da taxa estimada na hora, não escrito no código.
 
-Bake Nug, ciclo 1336, pool pagável 28 057 420 mutez para 2919 delegadores, taxa 477:
+Bake Nug, ciclo 1336, pool pagável 28 057 421 mutez para 2919 delegadores, taxa 477:
 
 | corte | delegadores pagos | taxa total | % do pool | acumula p/ próximo ciclo |
 |---:|---:|---:|---:|---:|
-| 0 (sem mínimo) | 2645 | 1 261 665 | 4,50 % | 1 374 |
-| **477 (= 1 taxa)** | **1069** | **509 913** | **1,82 %** | **137 552** |
-| 4 770 (10 taxas) | 407 | 194 139 | 0,69 % | 1 295 749 |
-| 100 000 (0,1 XTZ) | 46 | 21 942 | 0,08 % | 9 618 295 |
+| 0 (sem mínimo) | 2645 | 1 261 665 | 4,50 % | 0 |
+| **477 (= 1 taxa)** | **1069** | **509 913** | **1,82 %** | **136 178** |
+| 4 770 (10 taxas) | 407 | 194 139 | 0,69 % | 1 294 375 |
+| 100 000 (0,1 XTZ) | 46 | 21 942 | 0,08 % | 9 616 921 |
+
+A última coluna é **só o que é devido a delegador** — a soma dos valores que ficaram abaixo do
+corte. A **sobra de arredondamento fica com o baker** (§3.4) e por isso não entra aqui: ela não
+é dívida com ninguém. Sem mínimo, nada acumula, porque os 274 que sobram recebem exatamente 0.
 
 **1850 dos 2919 delegadores (63 %) receberiam um valor menor ou igual ao que custa pagá-los**
-(1891, ou 65 %, com a taxa de 543). 274 recebem exatamente 0.
+(1890, ou 65 %, com a taxa de 543). 274 recebem exatamente 0.
 
 #### Decisão — Rafael, 2026-08-30: opção A
 
