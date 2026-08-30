@@ -187,6 +187,31 @@ errado — o mesmo defeito do `validateCalculation()` do TAPS. O mutante `float-
 passava incólume, e foi o selftest que apontou. A versão atual recalcula tudo a partir
 do split, não do motor.
 
+## O portão no CI
+
+`.github/workflows/qa-gate.yml`. Nenhum passo usa `continue-on-error`.
+
+| job | quando roda | o que impõe |
+|---|---|---|
+| `harness-selftest` | todo push e PR | tipos + `selftest --plan-only`: os cenários conseguem reprovar |
+| `detect-app` | todo push e PR | existe `src-tauri/Cargo.toml`? |
+| `build` (linux, windows, android) | só quando `detect-app` diz que sim | os três alvos da ADR-0001 buildam |
+| `payout-bakingnet` | `workflow_dispatch` | rodada real: setup, distribuição, reconciliação, selftest completo |
+
+O app do TAPS chega no estágio 5 (BRES-48/BRES-49). Até lá o job de build fica
+**pulado** — cinza, não verde: ninguém lê "buildou" onde não buildou. E não fica
+vermelho: um `main` vermelho por semanas ensina a squad a ignorar o CI, que foi
+exatamente como os 12 erros TS2300 sobreviveram no `main` sem ninguém notar.
+Decisão de Rafael em 2026-08-30.
+
+Ninguém precisa lembrar de ligar o job depois: ele passa a valer sozinho no commit que
+criar `src-tauri/Cargo.toml`.
+
+> A detecção é um job com checkout, não um `if: hashFiles(...)` no job de build.
+> `hashFiles()` num `if` de job roda **antes** do checkout, sobre um workspace vazio, e
+> devolveria "não existe" para sempre — inclusive depois do app existir. O portão nunca
+> mais armaria, e nada avisaria.
+
 ## Ligar o motor do TAPS aqui
 
 O harness não conhece a implementação. Ele fala com a interface `PayoutEngine`

@@ -9,6 +9,17 @@
 #     um job de macOS/iOS aqui sem emendar a ADR.
 #
 # Nenhum passo usa `continue-on-error`. Um portão que deixa passar não é um portão.
+#
+# O job de build fica **pulado** enquanto o app do TAPS não existe (ele chega no
+# estágio 5, BRES-48/49), e passa a valer sozinho no commit que criar
+# `src-tauri/Cargo.toml`. Decisão de Rafael em 2026-08-30, BRES-44.
+#
+# Pulado é diferente de verde: o GitHub mostra o job em cinza, não em verde, então
+# ninguém lê "buildou" onde não buildou. E é diferente de vermelho: um `main` vermelho
+# por semanas ensina a squad a ignorar o CI, que foi exatamente como os 12 erros TS2300
+# sobreviveram no `main` sem ninguém notar.
+#
+# Ninguém precisa lembrar de ligar o job depois. O `detect-app` abaixo faz isso.
 
 name: QA Gate
 
@@ -49,8 +60,32 @@ jobs:
       - name: Selftest (mutantes de plano)
         run: npm run selftest -- --plan-only
 
+  # Descobre se já existe app para buildar. Precisa ser um job com checkout: `hashFiles()`
+  # num `if` de job roda ANTES do checkout, sobre um workspace vazio, e devolveria sempre
+  # "não existe" — inclusive depois do app existir. O portão nunca mais armaria.
+  detect-app:
+    name: Existe app para buildar?
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        shell: bash
+        run: |
+          if [ -f src-tauri/Cargo.toml ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "src-tauri/Cargo.toml existe — o portão de build está ARMADO."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::src-tauri/Cargo.toml não existe: o app do TAPS ainda não foi criado (BRES-48/BRES-49)."
+            echo "::notice::O job de build fica pulado e passa a valer sozinho no commit que criar esse arquivo."
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: detect-app
+    if: needs.detect-app.outputs.exists == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -95,17 +130,11 @@ jobs:
           sdkmanager "ndk;27.0.12077973"
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
-      # O app do TAPS chega no estágio 5 (BRES-48/BRES-49). Enquanto ele não existe,
-      # este passo falha em voz alta em vez de reportar verde para um build que não
-      # aconteceu. Um portão que passa sem verificar nada é pior que portão nenhum.
+      # Chegar aqui já significa que `src-tauri/Cargo.toml` existe — `detect-app` conferiu.
+      # A partir deste ponto não há saída silenciosa: se o build falhar, o portão fecha.
       - name: Build do alvo
         shell: bash
         run: |
-          if [ ! -f src-tauri/Cargo.toml ]; then
-            echo "::error::src-tauri/Cargo.toml não existe — o app do TAPS ainda não foi criado (BRES-48/BRES-49)."
-            echo "Quando existir, este passo roda \`tauri build\` para ${{ matrix.target }}."
-            exit 1
-          fi
           npm ci
           case "${{ matrix.target }}" in
             android) npm run tauri -- android build ;;
