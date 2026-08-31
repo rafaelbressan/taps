@@ -50,6 +50,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: qa-harness/package-lock.json
+
+      # O harness importa `@tezos-suite/chain` e `@tezos-suite/payout` como
+      # dependências `file:`, e as duas publicam `dist/`. Sem construí-las aqui,
+      # `npm ci` cria o link, o `dist/` não existe e o TypeScript não acha
+      # módulo nenhum — que foi exatamente como este job ficou vermelho no
+      # primeiro PR que trouxe o motor de produção para dentro do harness.
+      #
+      # A ordem importa: o motor resolve os tipos da camada de cadeia em
+      # `../tezos-chain/dist`, então a cadeia constrói primeiro.
+      - name: Camada de cadeia (dependência do harness)
+        working-directory: packages/tezos-chain
+        run: npm ci && npm run build
+      - name: Motor de payout (dependência do harness)
+        working-directory: packages/payout-engine
+        run: npm ci && npm run build
+
       - run: npm ci
       - name: Tipos
         run: npm run typecheck
