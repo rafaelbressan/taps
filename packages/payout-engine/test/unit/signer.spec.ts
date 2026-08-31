@@ -15,9 +15,8 @@ import { tz1 } from '../helpers/addresses';
 const CLIENT_AUTH_KEY = b58Encode(Buffer.alloc(32, 9), PrefixV2.Ed25519Seed);
 
 const validEnv = {
-  TAPS_SIGNER_URL: 'unix:///run/taps/signer.sock',
+  TAPS_SIGNER_URL: 'https://signer.internal:6732',
   TAPS_SIGNER_PKH: tz1(2),
-  TAPS_SIGNER_CLIENT_AUTH_KEY: CLIENT_AUTH_KEY,
 };
 
 describe('signer configuration', () => {
@@ -25,8 +24,14 @@ describe('signer configuration', () => {
     expect(loadSignerConfig(validEnv)).toEqual({
       url: validEnv.TAPS_SIGNER_URL,
       publicKeyHash: validEnv.TAPS_SIGNER_PKH,
-      clientAuthKey: CLIENT_AUTH_KEY,
     });
+  });
+
+  it('carries the client credential when one is set', () => {
+    expect(
+      loadSignerConfig({ ...validEnv, TAPS_SIGNER_CLIENT_AUTH_KEY: CLIENT_AUTH_KEY })
+        .clientAuthKey,
+    ).toBe(CLIENT_AUTH_KEY);
   });
 
   it.each(Object.keys(validEnv))('refuses to boot without %s', (missing) => {
@@ -41,8 +46,15 @@ describe('signer configuration', () => {
     expect(() => assertSignerUrlAllowed('not a url')).toThrow(ConfigurationError);
   });
 
-  it('accepts a unix socket and TLS', () => {
-    expect(assertSignerUrlAllowed('unix:///run/taps/signer.sock').protocol).toBe('unix:');
+  it('refuses a unix socket, which octez-signer cannot serve this API over', () => {
+    // Verified against octez-signer 25.1: `launch local signer` and
+    // `launch socket signer` speak a binary protocol, not this JSON one.
+    expect(() => assertSignerUrlAllowed('unix:///run/taps/signer.sock')).toThrow(
+      /only over TCP/,
+    );
+  });
+
+  it('accepts TLS', () => {
     expect(assertSignerUrlAllowed('https://signer.internal:6732').protocol).toBe('https:');
   });
 });
@@ -88,7 +100,6 @@ describe('no local signing key anywhere in the package', () => {
     expect(names.sort()).toEqual([
       'HttpsSignerTransport',
       'OctezRemoteSigner',
-      'UnixSocketSignerTransport',
       'assertSignerUrlAllowed',
       'createSignerTransport',
       'loadSignerConfig',
@@ -108,6 +119,17 @@ describe('octez-signer client', () => {
 
   const config = loadSignerConfig(validEnv);
   const authenticator = new Ed25519ClientAuthenticator(CLIENT_AUTH_KEY);
+
+  it('sends no authentication parameter when there is no authenticator', async () => {
+    const transport = new RecordingTransport({
+      status: 200,
+      body: JSON.stringify({ signature: 'edsigfake' }),
+    });
+    await new OctezRemoteSigner(config, undefined, transport).signOperation('6c00');
+    // The shape a signer without --require-authentication expects, verified
+    // end to end against octez-signer 25.1.
+    expect(transport.calls[0]!.path).toBe(`/keys/${config.publicKeyHash}`);
+  });
 
   it('signs with the generic-operation watermark and nothing else', async () => {
     const transport = new RecordingTransport({

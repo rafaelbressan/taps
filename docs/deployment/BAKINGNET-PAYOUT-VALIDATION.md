@@ -3,169 +3,190 @@
 O que falta para fechar o último critério do BRES-46: **payout completo em Bakingnet
 conferido contra a cadeia, mutez a mutez**.
 
-O código está pronto dos dois lados. O harness do BRES-44 já sabe rodar o motor de
-produção (`--engine taps`), e o motor recusa subir sem signer. O que falta é a metade
-que só quem tem o host pode fazer: **subir o `octez-signer` e financiar a chave**.
+O harness do BRES-44 já sabe rodar o motor de produção (`--engine taps`), e o motor
+recusa subir sem signer. Falta a metade que só quem tem o host pode fazer: **subir o
+`octez-signer` e financiar a chave**.
 
-Rafael decidiu a opção A em 31/08. Este documento é o combinado.
+> **Os três valores não existem em lugar nenhum ainda. Você os cria.** Não há onde
+> procurá-los: `TAPS_SIGNER_URL` é o endereço que você escolhe para o daemon,
+> `TAPS_SIGNER_PKH` é o endereço de uma chave que você gera, e o `octez-signer` é um
+> binário que você sobe. Os comandos abaixo produzem os três.
+
+**Tudo aqui foi executado de verdade contra `octez-signer` 25.1 em 31/08**, e a primeira
+versão deste documento estava errada — ver "O que mudou" no fim.
 
 ---
 
-## Parte 1 — Sua metade (host do signer)
+## Parte 1 — Sua metade
 
-### 1.1 O host
-
-Máquina **separada** da que roda o harness. Pode ser uma VM pequena, um container em
-outra máquina, ou o próprio tower — o que não vale é ser o mesmo processo, porque o
-ponto inteiro da opção A é que a chave não vive onde o payout roda.
-
-### 1.2 A chave de payout
-
-É o baker de testes da Bakingnet. Se você já tem o `state/cohort.json` do harness, a
-chave do baker está **lá em claro** — importe-a para o signer e **apague-a do JSON**
-depois. Se ainda não existe, gere-a no host do signer e nunca a copie para fora:
+Nada de Tezos precisa estar instalado. Tudo roda pela imagem oficial:
 
 ```bash
-octez-client --base-dir ~/.taps-signer gen keys payout
-octez-client --base-dir ~/.taps-signer show address payout
-# → tz1... (guarde: é o TAPS_SIGNER_PKH)
+docker pull tezos/tezos:latest
+mkdir -p ~/taps-signer/data ~/taps-signer/client
 ```
 
-Financie o endereço no faucet da Bakingnet: <https://faucet.bakingnet.teztnets.com>.
-Uns 8 000 ꜩ cobrem o cenário com folga.
+### 1.1 A chave de payout — vira o `TAPS_SIGNER_PKH`
 
-### 1.3 A chave de cliente
-
-Não é a chave dos fundos. Ela prova ao signer **quem está pedindo** e, sozinha, não move
-nada.
+É a chave do baker de testes. Ela nasce **dentro do host do signer** e nunca sai dali.
 
 ```bash
-octez-client --base-dir ~/.taps-client gen keys taps-client
-octez-client --base-dir ~/.taps-client show address taps-client --show-secret
-# → guarde a PUBLIC KEY (edpk...) para o passo 1.4
-# → guarde a SECRET KEY (edsk...) para o passo 2.1
+docker run --rm -v ~/taps-signer/data:/data --entrypoint octez-signer \
+  tezos/tezos:latest -d /data gen keys payout
+
+docker run --rm -v ~/taps-signer/data:/data --entrypoint octez-signer \
+  tezos/tezos:latest -d /data show address payout
 ```
 
-### 1.4 Subir o signer
+Sai algo assim:
 
-Nenhuma das opções abaixo é padrão. Todas precisam estar escritas:
+```
+Hash: tz1P3fJFGgbGnBNeZeSfHz5NEFzFe2aRqZBv     ← este é o TAPS_SIGNER_PKH
+Public Key: edpku9114QhK...
+```
+
+Financie esse `tz1...` no faucet: <https://faucet.bakingnet.teztnets.com>. Uns 8 000 ꜩ
+cobrem o cenário com folga.
+
+### 1.2 O certificado TLS — vira o `TAPS_SIGNER_URL`
+
+O signer serve esta API **só por TCP**, e HTTP em claro é proibido pela decisão de
+custódia. Então TLS, com certificado próprio:
 
 ```bash
-octez-signer --base-dir ~/.taps-signer \
-  add authorized key edpk...            # a PUBLIC KEY do passo 1.3
-
-octez-signer --base-dir ~/.taps-signer \
-  launch socket signer \
-  --socket /run/taps/signer.sock \
-  --magic-bytes 0x03 \
-  --require-authentication
+cd ~/taps-signer
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
+  -keyout tls.key -out tls.crt \
+  -subj "/CN=taps-signer" \
+  -addext "subjectAltName=DNS:taps-signer,DNS:localhost,IP:127.0.0.1"
 ```
+
+Se o signer for rodar em outra máquina, troque o `subjectAltName` pelo IP ou nome que a
+máquina do harness vai usar (o IP da Tailscale, por exemplo).
+
+### 1.3 Subir o daemon
 
 ```bash
-chmod 600 /run/taps/signer.sock      # só o dono
+docker run -d --name taps-signer -p 6732:6732 \
+  -v ~/taps-signer/data:/data \
+  -v ~/taps-signer/tls.crt:/tls.crt:ro \
+  -v ~/taps-signer/tls.key:/tls.key:ro \
+  --entrypoint octez-signer tezos/tezos:latest \
+  -d /data launch https signer /tls.crt /tls.key \
+  --address 0.0.0.0 --port 6732 --magic-bytes 0x03
+
+docker logs taps-signer     # deve dizer "accepting HTTPS requests on port 6732"
 ```
 
-O que **não** pode estar na linha de comando:
+`--magic-bytes 0x03` é o que faz o signer recusar cabeçalho de bloco e attestation: com
+ele, um host comprometido do TAPS não arranca do signer nada além de uma operação
+genérica — e o destino dessa operação é conferido do lado do TAPS, contra a lista de
+delegadores calculada localmente, antes de a assinatura ser pedida.
+
+O que **não** pode entrar na linha de comando:
 
 | Opção | Por quê |
 |---|---|
-| `--password-filename` | recria, no host do signer, exatamente o defeito que a opção A elimina |
+| `--password-filename` | recria, no host do signer, o defeito que a opção A elimina |
 | `--allow-list-known-keys` | expõe quais chaves o signer guarda |
 | `--allow-to-prove-possession` | não é necessário para payout |
-| HTTP em claro (`launch http signer`) | o corpo da requisição são os bytes que movem dinheiro |
+| `launch http signer` | corpo em claro; o corpo são os bytes que movem dinheiro |
 
-`--magic-bytes 0x03` é o que faz o signer recusar cabeçalho de bloco e attestation. Com
-ele, um host comprometido do TAPS não consegue arrancar do signer nada além de uma
-operação genérica — e o destino dessa operação é conferido do lado do TAPS, contra a
-lista de delegadores calculada localmente, antes de a assinatura ser pedida.
-
-O desbloqueio da chave é **interativo, no start do daemon**. Uma ação humana por
-restart, nunca uma por ciclo de payout.
-
-### 1.5 O que me mandar
-
-Três linhas, no comentário da issue:
+### 1.4 O que me mandar
 
 ```
-TAPS_SIGNER_URL=unix:///run/taps/signer.sock     (ou https://... se for por TLS)
-TAPS_SIGNER_PKH=tz1...                            (endereço do payout, já financiado)
-TAPS_SIGNER_CLIENT_AUTH_KEY=edsk...               (a SECRET do passo 1.3, não a do payout)
+TAPS_SIGNER_URL=https://<host-ou-ip>:6732
+TAPS_SIGNER_PKH=tz1...            (o do passo 1.1, já financiado)
 ```
 
-Se o signer estiver em outra máquina que não a do harness, mande também como o harness
-chega nele: `https://` com TLS, ou um túnel Tailscale expondo o socket.
+Mais o **conteúdo do `tls.crt`** (é público — é o certificado, não a chave). Sem ele o
+Node recusa o certificado próprio.
 
-**A chave de payout (`edsk` do passo 1.2) não deve ser mandada.** Se ela aparecer no
-comentário, a opção A deixou de valer e a chave precisa ser rotacionada.
+**A chave de payout (o `edsk` do baker) não vem no comentário.** Se vier, a opção A
+deixou de valer e a chave precisa ser rotacionada.
 
 ---
 
 ## Parte 2 — Minha metade
-
-### 2.1 Configuração
 
 ```bash
 export TEZOS_NETWORK=bakingnet
 export TEZOS_RPC_URL=https://rpc.bakingnet.teztnets.com
 export TZKT_API_URL=https://api.bakingnet.tzkt.io
 
-export TAPS_SIGNER_URL=...
-export TAPS_SIGNER_PKH=...
-export TAPS_SIGNER_CLIENT_AUTH_KEY=...
+export TAPS_SIGNER_URL=https://<host>:6732
+export TAPS_SIGNER_PKH=tz1...
+export NODE_EXTRA_CA_CERTS=/caminho/para/tls.crt
 
 # Teto por ciclo, em mutez. Sem ele o processo recusa subir.
 export TAPS_PAYOUT_CYCLE_CAP_MUTEZ=500000000
 ```
-
-### 2.2 Rodar
 
 ```bash
 cd packages/tezos-chain && npm ci && npm run build
 cd ../payout-engine   && npm ci && npm run build
 cd ../../qa-harness   && npm ci
 
-npm run doctor                       # confere rede, endpoints e coorte
-npm run setup -- --stage cohort      # cria o coorte (borda, tz4, poeira, staker)
-npm run run -- --engine taps         # paga de verdade e reconcilia contra a cadeia
+npm run doctor
+npm run setup -- --stage cohort
+npm run run -- --engine taps
 ```
 
-`--engine taps` roda `@tezos-suite/payout`. Sem a flag o harness continua rodando o
-oráculo (`reference`), que é o que o CI mede — trocar o padrão mudaria o portão sem
-ninguém pedir.
-
-### 2.3 O que a corrida prova
+### O que a corrida prova
 
 | Cenário | O que fica demonstrado |
 |---|---|
 | primeira execução | o dinheiro se move e bate com o plano, mutez a mutez, contra RPC e TzKT |
-| segunda execução do mesmo ciclo | zero injeções — o banco recusa a segunda distribuição |
-| morte entre injetar e confirmar | a retomada resolve o `opHash` gravado na cadeia e fecha sem reenviar |
-| membro de conta não alocada | o lote **não** cai; o burn de alocação sai do `storage_limit` estimado |
+| segunda execução do mesmo ciclo | zero injeções |
+| morte entre injetar e confirmar | a retomada resolve o `opHash` gravado e fecha sem reenviar |
+| conta não alocada | o lote **não** cai |
 | membro `tz4` | recebe |
-| membro de poeira | fica abaixo do corte, acumula, e o replanejamento mostra que ele é pago depois |
-| staker | **não** aparece no lote: o protocolo já pagou |
+| membro de poeira | fica abaixo do corte, acumula, e é pago no ciclo seguinte |
+| staker | **não** entra no lote |
 
 ---
 
-## Uma diferença que vale registrar
+## O que mudou nesta versão, e por quê
 
-O cenário `idempotencia-retomada-apos-morte` do harness exigia que a retomada
-**recusasse**. Isso está certo para o oráculo: o diário dele guarda a intenção *sem* o
-`opHash`, então depois de uma morte ele genuinamente não sabe se pagou, e "não sei"
-nunca autoriza reenviar.
+A primeira versão deste documento mandava rodar
+`octez-signer launch socket signer --socket /run/taps/signer.sock` e falava em HTTP sobre
+socket unix. **Isso não funciona, e eu só descobri porque subi o signer de verdade:**
 
-O motor de produção grava o hash **antes** de injetar, então ele sabe. A RN-12 diz o que
-fazer nesse caso, com essas palavras: *"a consulta on-chain diz 'aplicada'; o sistema
-fecha o ciclo como pago e **não** reenvia"*.
+- `launch socket signer` é **TCP com protocolo binário**, e nem aceita `--socket`.
+- `launch local signer --socket` é socket unix, mas também **protocolo binário**.
+- A API JSON que o motor fala existe só em `launch http signer` e `launch https signer`,
+  e as duas são **TCP**. Não existe modo que sirva essa API por socket unix.
 
-O cenário foi ajustado para aceitar as duas saídas corretas — resolver o hash na cadeia,
-ou recusar — e continua reprovando as duas erradas: injetar de novo, ou não injetar e
-também não dizer nada. Exigir recusa dos dois motores transformaria a limitação do
-oráculo em regra de negócio.
+O `unix://` foi removido do cliente: aceitar o esquema só faria a instalação falhar na
+primeira assinatura em vez de falhar ao subir.
+
+### Autenticação de cliente: pendente
+
+A decisão de custódia pede `--require-authentication`. **O cliente ainda não passa nessa
+checagem** — testado contra o signer real, toda variante volta
+`invalid authentication signature`, enquanto o mesmo pedido sem autenticação é aceito.
+Ou seja: URL, caminho, corpo e derivação de chave estão certos; só os bytes assinados
+estão errados.
+
+O layout que o Octez confere está em `src/lib_signer_services/signer_messages.ml`
+(`octez-v25.1`):
+
+```
+to_sign = 0x04 || tag || Signature.Public_key_hash.to_bytes pkh || data     (tag = 1)
+```
+
+Reproduzir isso ainda reprova, então `Public_key_hash.to_bytes` não é nem os 20 bytes
+crus nem os 21 da união com tag — os dois foram tentados.
+
+**Consequência prática:** a validação em Bakingnet roda **sem**
+`--require-authentication`. O que continua valendo é TLS, `--magic-bytes 0x03`, a
+conferência de destino contra a lista de delegadores e o teto por ciclo. Fechar a
+autenticação é item próprio, e é **pré-requisito de mainnet**, não de Bakingnet.
 
 ---
 
 ## Mainnet
 
 Não está neste documento e não está neste épico. Primeira execução que move fundos reais
-é decisão do Rafael, em issue separada, com ele presente.
+é decisão do Rafael, em issue separada, com ele presente — e depois da autenticação
+resolvida.

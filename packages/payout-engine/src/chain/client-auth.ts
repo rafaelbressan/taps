@@ -12,11 +12,29 @@ import type { SignerAuthenticator, SignerRequest } from './signer';
  * holds only this key can move nothing. The payout key never leaves the
  * signer host.
  *
- * The byte layout below — magic byte, then the request path, then the data —
- * is the layout this package signs over. It must be confirmed against the
- * signer actually deployed before the first run that moves funds; a mismatch
- * fails closed, with the signer refusing the request, which is the direction
- * a wrong guess should fail in.
+ * STATUS: NOT ACCEPTED BY octez-signer YET. Do not turn on
+ * `--require-authentication` expecting this to work.
+ *
+ * Tested on 2026-08-31 against a real `octez-signer` 25.1: every payload this
+ * file produces comes back `invalid authentication signature`. The same
+ * signer accepts the very same request with authentication off, so the URL,
+ * the path, the body and the key derivation are all correct — only these
+ * bytes are wrong.
+ *
+ * The layout Octez checks is, from `src/lib_signer_services/signer_messages.ml`
+ * at tag `octez-v25.1`:
+ *
+ *     to_sign = 0x04 || tag || Signature.Public_key_hash.to_bytes pkh || data
+ *
+ * with `tag = 1` for a signing request. Reproducing that still fails, so
+ * `Public_key_hash.to_bytes` is neither the 20 raw bytes nor the 21 bytes of
+ * the tagged union — both were tried, along with the request path and a sweep
+ * of leading bytes. What it actually encodes has to be read off a working
+ * client before any of this is trusted.
+ *
+ * Until then the engine talks to a signer WITHOUT `--require-authentication`.
+ * The defences that do hold are TLS, `--magic-bytes 0x03`, the destination
+ * allowlist and the per-cycle ceiling.
  */
 
 /** Distinct from 0x03: an authentication signature is not an operation. */

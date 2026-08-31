@@ -1,4 +1,3 @@
-import { request as httpRequest } from 'node:http';
 import { ConfigurationError, HttpError } from '@tezos-suite/chain';
 
 /**
@@ -30,16 +29,26 @@ export interface PayoutSigner {
 export const GENERIC_OPERATION_WATERMARK = '03';
 
 export interface SignerConfig {
-  /** `https://…` or `unix:///path/to/socket`. Plain HTTP is refused. */
+  /**
+   * `https://…`. Verified against Octez 25.1: the signer serves this JSON API
+   * on `launch http signer` and `launch https signer`, both TCP only. There is
+   * NO mode that serves it over a unix socket — `launch local signer` and
+   * `launch socket signer` speak a different, binary protocol — so a
+   * `unix://` endpoint here could never work and is refused.
+   */
   readonly url: string;
   /** The payout key's public key hash, as known to the signer. */
   readonly publicKeyHash: string;
   /**
-   * The CLIENT credential, base58 `edsk…`. This is the key the signer's
-   * `--require-authentication` checks; it is NOT the key that holds the
-   * funds, and possessing it moves no money on its own.
+   * The CLIENT credential, base58 `edsk…`, for a signer started with
+   * `--require-authentication`. It is NOT the key that holds the funds and
+   * moves no money on its own.
+   *
+   * Optional because this client cannot yet satisfy that check — see
+   * `client-auth.ts`. Against a signer without `--require-authentication` it
+   * is not needed at all.
    */
-  readonly clientAuthKey: string;
+  readonly clientAuthKey?: string;
 }
 
 const SIGNER_URL_ENV = 'TAPS_SIGNER_URL';
@@ -55,11 +64,15 @@ function requireEnv(env: NodeJS.ProcessEnv, name: string, why: string): string {
 }
 
 /**
- * Refuses plain HTTP.
+ * Only TLS.
  *
- * The signer speaks a protocol where the request body is the exact bytes that
- * will move money. Over cleartext HTTP anyone on the path can substitute
- * them, and the signer will sign what it is given.
+ * The request body is the exact byte string that will move money. Over
+ * cleartext HTTP anyone on the path can substitute it and the signer will
+ * sign what it is handed.
+ *
+ * `unix://` is refused too, and not for security: `octez-signer` has no mode
+ * that serves this JSON API over a unix socket. Accepting the scheme would
+ * only let a deployment fail at the first signature instead of at boot.
  */
 export function assertSignerUrlAllowed(url: string): URL {
   let parsed: URL;
@@ -70,10 +83,16 @@ export function assertSignerUrlAllowed(url: string): URL {
       `${SIGNER_URL_ENV} is not a URL: ${JSON.stringify(url)}`,
     );
   }
-  if (parsed.protocol === 'https:' || parsed.protocol === 'unix:') return parsed;
+  if (parsed.protocol === 'https:') return parsed;
+  if (parsed.protocol === 'unix:') {
+    throw new ConfigurationError(
+      `${SIGNER_URL_ENV} is a unix socket, and octez-signer serves this JSON API only ` +
+        'over TCP — use `launch https signer <cert> <key>` and an https:// URL',
+    );
+  }
   throw new ConfigurationError(
-    `${SIGNER_URL_ENV} uses ${parsed.protocol} — the signer is reachable over a unix ` +
-      'socket (unix:///path) or TLS (https://), never cleartext HTTP',
+    `${SIGNER_URL_ENV} uses ${parsed.protocol} — the signer must be reached over TLS ` +
+      '(https://), never cleartext HTTP',
   );
 }
 
@@ -91,6 +110,7 @@ export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): SignerCo
     'every signature comes from a remote octez-signer and there is no local key to fall back to',
   );
   assertSignerUrlAllowed(url);
+  const clientAuthKey = env[SIGNER_AUTH_ENV]?.trim();
   return {
     url,
     publicKeyHash: requireEnv(
@@ -98,11 +118,7 @@ export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): SignerCo
       SIGNER_PKH_ENV,
       'the payout address must be named explicitly, never discovered',
     ),
-    clientAuthKey: requireEnv(
-      env,
-      SIGNER_AUTH_ENV,
-      'the signer runs with --require-authentication and this is the client credential',
-    ),
+    ...(clientAuthKey ? { clientAuthKey } : {}),
   };
 }
 
@@ -159,67 +175,17 @@ export class HttpsSignerTransport implements SignerTransport {
   }
 }
 
-/** Unix socket endpoint, which is what owner-only permissions protect. */
-export class UnixSocketSignerTransport implements SignerTransport {
-  constructor(
-    private readonly socketPath: string,
-    private readonly timeoutMs = 15_000,
-  ) {}
-
-  send(
-    method: 'GET' | 'POST',
-    path: string,
-    body?: string,
-  ): Promise<{ status: number; body: string }> {
-    return new Promise((resolve, reject) => {
-      const req = httpRequest(
-        {
-          socketPath: this.socketPath,
-          path,
-          method,
-          timeout: this.timeoutMs,
-          headers:
-            body === undefined
-              ? {}
-              : {
-                  'content-type': 'application/json',
-                  'content-length': Buffer.byteLength(body),
-                },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk: Buffer) => chunks.push(chunk));
-          res.on('end', () =>
-            resolve({
-              status: res.statusCode ?? 0,
-              body: Buffer.concat(chunks).toString('utf8'),
-            }),
-          );
-        },
-      );
-      req.on('timeout', () => req.destroy(new Error('signer socket timed out')));
-      req.on('error', reject);
-      if (body !== undefined) req.write(body);
-      req.end();
-    });
-  }
-}
-
 export function createSignerTransport(config: SignerConfig): SignerTransport {
-  const parsed = assertSignerUrlAllowed(config.url);
-  if (parsed.protocol === 'unix:') {
-    return new UnixSocketSignerTransport(decodeURIComponent(parsed.pathname));
-  }
+  assertSignerUrlAllowed(config.url);
   return new HttpsSignerTransport(config.url.replace(/\/+$/, ''));
 }
 
 /**
  * Client for `octez-signer`.
  *
- * The signer is expected to be started with, explicitly, all of:
- *   --magic-bytes 0x03            only generic operations
- *   --require-authentication      plus `add authorized key <pk>`
- *   a unix socket with owner-only permissions, or TLS
+ * The signer is expected to be started with, explicitly:
+ *   launch https signer <cert> <key>   TLS; the JSON API is TCP only
+ *   --magic-bytes 0x03                 only generic operations
  * and WITHOUT `--allow-list-known-keys`, `--allow-to-prove-possession` or
  * `--password-filename` — the last one recreates, on the signer host, the
  * very defect the custody decision removes. Unlocking is interactive at
@@ -228,7 +194,12 @@ export function createSignerTransport(config: SignerConfig): SignerTransport {
 export class OctezRemoteSigner implements PayoutSigner {
   constructor(
     private readonly config: SignerConfig,
-    private readonly authenticator: SignerAuthenticator,
+    /**
+     * Only for a signer started with `--require-authentication`. Omit it and
+     * no `authentication` parameter is sent, which is what a signer without
+     * that flag expects.
+     */
+    private readonly authenticator: SignerAuthenticator | undefined,
     private readonly transport: SignerTransport = createSignerTransport(config),
   ) {}
 
@@ -239,12 +210,15 @@ export class OctezRemoteSigner implements PayoutSigner {
   async signOperation(forgedBytesHex: string): Promise<string> {
     const dataHex = `${GENERIC_OPERATION_WATERMARK}${stripHex(forgedBytesHex)}`;
     const path = `/keys/${this.config.publicKeyHash}`;
-    const authentication = await this.authenticator.authenticate({
+    const authentication = await this.authenticator?.authenticate({
       method: 'POST',
       path,
       dataHex,
     });
-    const url = `${path}?authentication=${encodeURIComponent(authentication)}`;
+    const url =
+      authentication === undefined
+        ? path
+        : `${path}?authentication=${encodeURIComponent(authentication)}`;
 
     const response = await this.transport.send('POST', url, JSON.stringify(dataHex));
     if (response.status < 200 || response.status >= 300) {

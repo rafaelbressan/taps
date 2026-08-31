@@ -110,10 +110,16 @@ export class TapsEngine implements PayoutEngine {
 
     // Sem endpoint de signer configurado o construtor abaixo lança, e é isso que
     // queremos: não existe modo degradado com chave em disco.
+    //
+    // A autenticação de cliente só entra se houver credencial configurada. Hoje
+    // ela NÃO é aceita pelo octez-signer 25.1 (ver `client-auth.ts`), então a
+    // validação em Bakingnet roda sem `--require-authentication`.
     const signerConfig = loadSignerConfig();
     const signer = new OctezRemoteSigner(
       signerConfig,
-      new Ed25519ClientAuthenticator(signerConfig.clientAuthKey),
+      signerConfig.clientAuthKey
+        ? new Ed25519ClientAuthenticator(signerConfig.clientAuthKey)
+        : undefined,
     );
     const rpc = new HttpPayoutRpc(deps.cfg.rpcUrl, { timeoutMs: deps.cfg.timeoutMs });
 
