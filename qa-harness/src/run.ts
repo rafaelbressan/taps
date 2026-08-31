@@ -111,6 +111,8 @@ interface Wiring {
   fee: bigint;
   allocationBurn: bigint;
   gasPerTransfer: bigint;
+  /** Ausente no modo offline. Só estima; não assina payout. */
+  toolkit?: TezosToolkit;
   /** Ausente no modo offline: sem cadeia, não há constante lida da cadeia. */
   constants?: ProtocolConstants;
   /** Ausente no modo offline: sem cadeia, não há o que reconciliar. */
@@ -175,6 +177,7 @@ async function wireBakingnet(
     fee,
     allocationBurn,
     gasPerTransfer: batcher.gasPerTransfer,
+    toolkit,
     constants,
     chain: { rpc, tzkt },
   };
@@ -419,7 +422,7 @@ function buildEngine(
   const name = opts.engine ?? 'reference';
   if (name === 'reference') return new ReferenceEngine(wired.sender, sabotage);
 
-  if (!wired.constants || !wired.chain) {
+  if (!wired.constants || !wired.chain || !wired.toolkit) {
     throw new Error(
       'o motor `taps` assina num octez-signer remoto e confere o hash na cadeia: ' +
         'não roda em --offline nem sem RPC.',
@@ -438,6 +441,7 @@ function buildEngine(
     protocolHash: wired.network.protocol,
     bakerAddress: wired.cohort.baker.address,
     sender: wired.sender,
+    toolkit: wired.toolkit,
     gasPerTransfer: wired.gasPerTransfer,
     allocationBurn: wired.allocationBurn,
     actor: process.env.TAPS_QA_ACTOR ?? 'qa-harness',

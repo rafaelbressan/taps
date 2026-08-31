@@ -501,17 +501,38 @@ describe('a batch that lands with a non-applied status', () => {
   it('is not counted as paid, and the money is owed next cycle', async () => {
     const chain = new FakeChain();
     chain.nextInjectionStatus = 'backtracked';
-    const harness = buildHarness({ split: simpleSplit(), chain, attemptsPerBatch: 1 });
+    // Two attempts allowed on purpose: the engine still must not use the
+    // second. The same bytes that the chain just rejected would be rejected
+    // identically, and only the fees would be new — measured on Bakingnet,
+    // where six identical batches died on the same gas_exhausted.
+    const harness = buildHarness({ split: simpleSplit(), chain, attemptsPerBatch: 2 });
 
     const result = await harness.engine.run(harness.request);
     expect(result.status).toBe('failed');
     expect(result.totalSent).toBe(0n);
+    expect(harness.chain.injected.size).toBe(1);
+    expect(harness.signer.signed).toHaveLength(1);
 
     const carry = await harness.store.loadCarryOver(BAKER);
     expect([...carry.keys()].sort()).toEqual([ALICE, BOB, CAROL].sort());
     for (const line of result.lines) {
       expect(carry.get(line.address)).toBe(line.payable);
     }
+  });
+
+  it('refuses to replay the stored batches on a later run', async () => {
+    const chain = new FakeChain();
+    chain.nextInjectionStatus = 'backtracked';
+    const store = new InMemoryPayoutStore();
+    const first = buildHarness({ split: simpleSplit(), chain, store });
+    await first.engine.run(first.request);
+
+    chain.nextInjectionStatus = 'applied';
+    const second = buildHarness({ split: simpleSplit(), chain, store });
+    await expect(second.engine.run(second.request)).rejects.toThrow(/failed on chain/);
+    // Nothing new signed, nothing new injected: re-planning is a decision.
+    expect(second.signer.signed).toHaveLength(0);
+    expect(chain.injected.size).toBe(1);
   });
 });
 

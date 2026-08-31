@@ -26,11 +26,13 @@ import {
   RpcBatchInjector,
   TzKTOperationStateSource,
   buildDelegatorLines,
+  createChunkedEstimator,
   loadSignerConfig,
   makeMinimumPayout,
   type EstimateTransfers,
   type PayoutStore,
 } from '@tezos-suite/payout';
+import type { TezosToolkit } from '@taquito/taquito';
 import {
   TzKTHeadSource,
   TzKTHttp,
@@ -72,6 +74,12 @@ export interface TapsEngineDeps {
    * de um mutez na estimativa mudaria quem é pago e a reconciliação acusaria.
    */
   sender: PaymentSender;
+  /**
+   * Usado SÓ para `estimate.batch()`. Nenhuma assinatura de payout sai daqui:
+   * o motor assina no signer remoto, sempre. O toolkit do harness carrega a
+   * chave do coorte porque o próprio harness precisa dela para provisionar.
+   */
+  toolkit: TezosToolkit;
   gasPerTransfer: bigint;
   allocationBurn: bigint;
   actor: string;
@@ -88,6 +96,7 @@ export class TapsEngine implements PayoutEngine {
   readonly #core: TapsPayoutEngineCore;
   readonly #d: TapsEngineDeps;
   readonly #constants: ChainConstants;
+  readonly #rpc: HttpPayoutRpc;
   #lastPlanned: { split: RewardSplit; policy: PayoutPolicy } | null = null;
 
   constructor(deps: TapsEngineDeps) {
@@ -122,6 +131,7 @@ export class TapsEngine implements PayoutEngine {
         : undefined,
     );
     const rpc = new HttpPayoutRpc(deps.cfg.rpcUrl, { timeoutMs: deps.cfg.timeoutMs });
+    this.#rpc = rpc;
 
     this.store = new FilePayoutStore(join(deps.cfg.stateDir, 'payout-engine'));
     this.#core = new TapsPayoutEngineCore({
@@ -313,20 +323,36 @@ export class TapsEngine implements PayoutEngine {
   }
 
   /**
-   * A estimativa do motor usa os mesmos números que o harness calibrou na rede, para que
-   * o plano do adaptador e o plano interno do motor coincidam. O `storage_limit` de quem
-   * precisa ser alocado vem de `origination_size` lido da cadeia — nunca zero fixo.
+   * Estimativa de verdade, por destinatário, vinda de `estimate.batch()`.
+   *
+   * A primeira versão daqui devolvia um número único de gas — o que a calibração
+   * do harness mediu — para todos. Isso derrubou a corrida inteira em Bakingnet
+   * com `gas_exhausted.operation`: uma transferência que precisa **alocar** a
+   * conta de destino custa mais gas do que uma para conta já alocada, e o valor
+   * calibrado veio de uma conta alocada. A primeira operação do lote falhou e as
+   * outras 124 vieram `skipped`.
+   *
+   * A lição é a mesma do resto deste pacote: número que a rede sabe se pergunta
+   * à rede, um por destinatário, nunca se aproxima por um só.
    */
   #estimator(): EstimateTransfers {
-    return async (recipients): Promise<EstimatedTransfer[]> =>
-      recipients.map((recipient) => ({
-        address: recipient.address,
-        amount: recipient.amount,
-        gasLimit: this.#d.gasPerTransfer,
-        storageLimit: recipient.emptied ? BigInt(this.#constants.originationSize) : 0n,
-        feeMutez: this.#d.sender.estimatedTransferCost(false),
-        burnMutez: recipient.emptied ? this.#d.allocationBurn : 0n,
-      }));
+    // O saldo entra na conta porque o teto da simulação não é só gas: a
+    // `estimate.batch()` cobra um burn imaginário de
+    // `hard_storage_limit_per_operation × cost_per_byte` por operação contra o
+    // saldo real. Com 494 XTZ isso dá ~32 operações por chamada, e pedir mais
+    // volta como `subtraction_underflow` — que não fala nada sobre saldo.
+    let cached: EstimateTransfers | null = null;
+    return async (recipients) => {
+      if (!cached) {
+        const source = await this.#d.toolkit.signer.publicKeyHash();
+        const balance = await this.#rpc.getBalance(source);
+        cached = createChunkedEstimator(this.#d.toolkit, this.#constants, {
+          gasBufferPercent: 10,
+          sourceBalanceMutez: balance,
+        });
+      }
+      return cached(recipients);
+    };
   }
 
   #distributableIn(): number {

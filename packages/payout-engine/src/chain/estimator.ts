@@ -3,6 +3,7 @@ import {
   InvariantViolationError,
   estimateTransfers,
   type EstimatedTransfer,
+  type Mutez,
   type ProtocolConstants,
   type Recipient,
 } from '@tezos-suite/chain';
@@ -28,6 +29,46 @@ export interface ChunkedEstimatorOptions {
   readonly blockGasUtilisationPercent?: number;
   /** Recipients in the first, exploratory chunk used to learn the gas cost. */
   readonly probeSize?: number;
+  /**
+   * Balance of the paying account, in mutez.
+   *
+   * Gas is not the only ceiling on how many operations one `estimate.batch()`
+   * call may carry. The simulation runs each operation at
+   * `hard_storage_limit_per_operation`, so it charges an imaginary burn of
+   * `hard_storage_limit * cost_per_byte` PER OPERATION against the real
+   * balance — 15 XTZ each on Bakingnet today. A baker holding 494 XTZ can
+   * therefore only have about 32 operations simulated at once, however
+   * little gas they use, and asking for more comes back as
+   * `subtraction_underflow` from the node rather than as anything about
+   * balance.
+   *
+   * Measured on Bakingnet on 2026-08-31: 126 recipients in one call failed
+   * exactly this way while the real cost was 343 XTZ against 494 available.
+   *
+   * Omitted means "gas is the only bound", which is right only for a source
+   * rich enough that the imaginary burn cannot exhaust it.
+   */
+  readonly sourceBalanceMutez?: Mutez;
+}
+
+/**
+ * How many operations one simulation may carry before its imaginary burn
+ * exhausts the source. Half the arithmetic maximum, because the simulation
+ * also subtracts the real amounts being transferred.
+ */
+function simulationBudget(
+  constants: ProtocolConstants,
+  sourceBalanceMutez: Mutez | undefined,
+): bigint {
+  if (sourceBalanceMutez === undefined) return BigInt(Number.MAX_SAFE_INTEGER);
+  const burnPerOperation = constants.hardStorageLimitPerOperation * constants.costPerByte;
+  if (burnPerOperation <= 0n) return BigInt(Number.MAX_SAFE_INTEGER);
+  const budget = sourceBalanceMutez / (2n * burnPerOperation);
+  return budget > 0n ? budget : 1n;
+}
+
+function minBigInt(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
 }
 
 export function createChunkedEstimator(
@@ -43,7 +84,8 @@ export function createChunkedEstimator(
     );
   }
   const gasBudget = (constants.hardGasLimitPerBlock * utilisation) / 100n;
-  const probeSize = Math.max(1, options.probeSize ?? 10);
+  const probeCeiling = Number(simulationBudget(constants, options.sourceBalanceMutez));
+  const probeSize = Math.max(1, Math.min(options.probeSize ?? 10, probeCeiling));
 
   return async (recipients: readonly Recipient[]): Promise<EstimatedTransfer[]> => {
     if (recipients.length === 0) return [];
@@ -52,11 +94,16 @@ export function createChunkedEstimator(
       gasBufferPercent: options.gasBufferPercent,
     });
     const worstGas = probe.reduce((max, t) => (t.gasLimit > max ? t.gasLimit : max), 1n);
-    const perChunk = Number(gasBudget / worstGas);
+    const byGas = gasBudget / worstGas;
+    const perChunk = Number(
+      minBigInt(byGas, simulationBudget(constants, options.sourceBalanceMutez)),
+    );
     if (perChunk < 1) {
       throw new InvariantViolationError(
-        'at least one transfer fits the simulation gas budget',
-        `one transfer needs ${worstGas} gas, budget is ${gasBudget}`,
+        'at least one transfer fits the simulation budget',
+        `one transfer needs ${worstGas} gas against a budget of ${gasBudget}, and the ` +
+          `source balance allows ${simulationBudget(constants, options.sourceBalanceMutez)} ` +
+          'operations per simulation',
       );
     }
 

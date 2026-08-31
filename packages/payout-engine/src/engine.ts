@@ -171,6 +171,19 @@ export class PayoutEngine {
         'a previous run left this cycle blocked; clear it by hand before running again',
       );
     }
+    if (snapshot?.distribution.status === 'failed') {
+      // The persisted batches are the ones the chain already rejected. Sending
+      // them again sends the same bytes to the same fate and burns the fees a
+      // second time — measured on Bakingnet, where six identical batches died
+      // on the same `gas_exhausted.operation`. Re-planning needs fresh
+      // estimates, which is a new decision, not a retry.
+      throw new PayoutBlockedError(
+        request.bakerId,
+        request.cycle,
+        'a previous run ended failed on chain; the stored batches would fail the same way, ' +
+          'so re-planning is a human decision',
+      );
+    }
 
     if (!snapshot) {
       snapshot = await this.planAndPersist(request, constants);
@@ -453,14 +466,26 @@ export class PayoutEngine {
           tally.skipped.push(record.opHash);
           return 'confirmed';
         }
-        // Only `expired` and `failed` may be resent. Anything else means the
-        // operation may still land, and resending it pays the same people
-        // twice.
+        // Only `expired` and `failed` are safe to resend at all — anything
+        // else may still land, and resending it pays the same people twice.
         try {
           assertSafeToResend(outcome);
         } catch (cause) {
           await this.block(request, (cause as Error).message);
           throw cause;
+        }
+
+        // Safe is not the same as useful. `failed` means the operation reached
+        // a block and the chain rejected it, so the identical bytes will be
+        // rejected identically; only the fees would be new. `expired` is the
+        // one worth resending: it never made it into a block at all.
+        if (outcome.status === 'failed') {
+          await this.audit(request, 'batch.failed', 'error', {
+            batch: record.index,
+            opHash: record.opHash,
+            chainStatus: outcome.chainStatus ?? 'failed',
+          });
+          return 'failed';
         }
         await this.audit(request, 'batch.resend', 'ok', {
           batch: record.index,
