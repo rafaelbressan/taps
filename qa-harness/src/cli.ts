@@ -20,6 +20,7 @@ import { renderReport } from './report.ts';
 import { renderSelftest, selftest } from './selftest.ts';
 import { isMutantName, MUTANTS, type MutantName } from './payout/sabotage.ts';
 import { loadCohort } from './cohort.ts';
+import { audit, renderAudit } from './audit.ts';
 
 const log = (msg: string): void => {
   process.stderr.write(`${msg}\n`);
@@ -97,6 +98,29 @@ async function main(): Promise<number> {
       return report.passed ? 0 : 1;
     }
 
+    case 'audit': {
+      const baker = flag(argv, 'baker');
+      const cycle = Number(flag(argv, 'cycle') ?? NaN);
+      if (!baker || !Number.isInteger(cycle)) {
+        log('uso: audit --baker <tz...> --cycle <n> [--fee-num 10] [--fee-den 100]');
+        return 2;
+      }
+      const report = await audit(cfg, {
+        baker,
+        cycle,
+        feeNum: BigInt(flag(argv, 'fee-num') ?? '10'),
+        feeDen: BigInt(flag(argv, 'fee-den') ?? '100'),
+        log,
+      });
+      process.stdout.write(renderAudit(report));
+      await mkdir(cfg.reportDir, { recursive: true });
+      await writeFile(
+        join(cfg.reportDir, `audit-${baker}-${cycle}.json`),
+        `${JSON.stringify(report, null, 2)}\n`,
+      );
+      return report.passed ? 0 : 1;
+    }
+
     case 'selftest': {
       const report = await selftest(cfg, {
         poolMutez: BigInt(flag(argv, 'pool') ?? '400000000'),
@@ -122,6 +146,7 @@ async function main(): Promise<number> {
           '  doctor                       confere rede, endpoints e coorte',
           '  setup [--stage accounts|baker] [--fund <XTZ>]',
           '  run [--dry-run] [--pool <mutez>] [--split tzkt:<baker>/<cycle>] [--sabotage <m1,m2>]',
+          '  audit --baker <tz> --cycle <n>   confere leitura e aritmética num ciclo fechado real (só leitura)',
           '  selftest [--plan-only]       prova que os cenários conseguem reprovar',
           '  selftest --offline           idem, sem rede e sem baker provisionado (é o que roda no CI)',
           '',

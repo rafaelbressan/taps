@@ -137,6 +137,55 @@ stake externo, por causa do `delegate_parameters_activation_delay`. A partir da�
 npm run run -- --split tzkt:<endereço-do-baker>/<ciclo>
 ```
 
+## Auditoria de dado real (`audit`)
+
+```bash
+npm run audit -- --baker tz1XMiZwHpHZ8a1AfwRWKfzLskJgZNyV8PHs --cycle 555
+```
+
+Só leitura, e sem como deixar de ser: não recebe chave nenhuma. Confere leitura e
+aritmética contra um **ciclo fechado de um baker que realmente está bakando**.
+
+Existe por um motivo desconfortável: o baker de testes deste harness tem direitos de
+consenso, mas **não há um daemon `octez-baker` atrás dele**. Ele perde todos os direitos e
+fecha o ciclo com pool zero, e pool zero não valida fórmula nenhuma. Sem um baker de
+verdade a aritmética nunca encosta em recompensa real.
+
+Sete checagens, com três estados. `n/a` é para o que **este ciclo não exercitou** — um
+baker sem staker não prova nem desmente nada sobre stakers. Marcar isso como verde seria
+mentir por omissão; o rodapé mostra quantas foram exercitadas de fato.
+
+Resultado em 2026-08-31, três bakers × três ciclos fechados da Bakingnet: **9 de 9 sem
+reprovação**. Exemplo (`tz1XMiZwHpHZ…`, ciclo 555, pool 28 468 033 mutez, 6 delegadores,
+3 stakers):
+
+```
+passa  lista-completa        Σ delegatedBalance 75572265326 == externalDelegatedBalance
+passa  poder-de-baking       staked 1180513823243 + delegated/3 == bakingPower 1210868119280
+passa  aritmetica-fecha      own 4842670 + taxa 2362536 + Σdevido 21262826 + sobra 1 = 28468033
+n/a    staker-puro-nao-recebe
+passa  stake-fora-do-pool    *StakedShared 104740109 mutez ficou de fora
+passa  staker-delegador-recebe-so-o-delegado
+passa  nada-excede-o-pool    sobra 1 mutez
+```
+
+O número que justifica tudo: **`*StakedShared` = 104 740 109 mutez, contra um pool
+distribuível de 28 468 033.** O rendimento de stake é 3,7× o que o baker tem para pagar à
+mão. Somá-lo ao pool — o que o TAPS atual faria — pagaria 4,7× o devido.
+
+### Duas coisas que este comando pegou, ambas na conferência e não no motor
+
+1. **Assumi que staker não pode estar no batch.** O dado real reprovou: os três stakers
+   daquele baker **também são delegadores**. Um mesmo endereço tem saldo delegado e saldo
+   stakeado com o mesmo baker; o delegado tem de ser pago. A checagem virou "staker *puro*
+   não recebe" mais "quem é os dois recebe só pelo delegado".
+
+2. **Ordem das operações da taxa.** A checagem calculava `bruto × (den − num) ÷ den` onde a
+   §3.4 manda `taxa = bruto × num ÷ den` e `pagável = bruto − taxa`. Parece equivalente e
+   não é, porque a divisão é inteira: com bruto 7 e taxa de 10 %, a ordem certa dá 7 e a
+   "equivalente" dá 6. Reprovou um ciclo real (`tz1MbwKSdbL5…`/553) — o motor estava certo,
+   a conferência é que estava errada.
+
 ## A trava de ciclo
 
 `--split tzkt:<baker>/<ciclo>` recusa antes de ler qualquer número quando o ciclo não é
