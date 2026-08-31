@@ -1,0 +1,32 @@
+{
+  "name": "@taps/qa-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portão de QA do TAPS: payout ponta a ponta em Bakingnet, reconciliado contra a cadeia.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "harness": "tsx src/cli.ts",
+    "setup": "tsx src/cli.ts setup",
+    "run": "tsx src/cli.ts run",
+    "selftest": "tsx src/cli.ts selftest",
+    "doctor": "tsx src/cli.ts doctor",
+    "selftest:offline": "tsx src/cli.ts selftest --offline",
+    "audit": "tsx src/cli.ts audit"
+  },
+  "dependencies": {
+    "@taquito/signer": "^25.0.0",
+    "@taquito/taquito": "^25.0.0",
+    "@taquito/utils": "^25.0.0",
+    "bip39": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.7.0"
+  }
+}
