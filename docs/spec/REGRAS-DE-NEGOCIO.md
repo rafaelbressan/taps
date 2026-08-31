@@ -27,6 +27,15 @@ quebra a regra ou expõe seu limite. Onde há dinheiro, o exemplo fecha em **mut
 Comissões são inteiros em pontos-base (bp): 5,00% = 500 bp, 100% = 10 000 bp. A aritmética em
 XTZ com ponto flutuante que aparece no sistema atual é um acidente (AI-01, AI-02), não uma regra.
 
+**Estado das decisões.** As 14 decisões pendentes da versão anterior foram respondidas por Rafael
+em 2026-08-30 e viraram regra. A Parte 4 deixou de ser lista de perguntas e passou a ser o registro
+do que foi decidido, com o ponteiro para a RN que carrega cada decisão. Só **DP-09** continua
+aberta, e não é decisão: é fato a recuperar.
+
+**Numeração.** O número de uma RN é identidade, não ordem de leitura. As regras criadas pelas
+decisões de 2026-08-30 (RN-24 a RN-29) estão posicionadas na seção temática a que pertencem, com
+número fora de sequência.
+
 **Sinal de status:** onde a regra descreve o que o sistema faz **hoje** e isso está errado, o texto
 diz explicitamente "hoje" e aponta a correção. Regra correta e comportamento atual não são a mesma
 coisa, e este documento não finge que são.
@@ -92,7 +101,8 @@ exceção e sem combinação.
 **Borda.** Comissão individual de 10 000 bp (100%): o delegador recebe 0 e não entra no lote
 (RN-08), mas o sistema não distingue "delegador com 100% de comissão" de "delegador sem
 recompensa". O baker que quiser suspender alguém tem, hoje, exatamente a mesma tela que quem
-quer cobrar 100% — e nenhum aviso. Ver **DP-11**.
+quer cobrar 100% — e nenhum aviso. Resolvido em **RN-20**: suspender é estado próprio, não
+comissão de 100%.
 
 ---
 
@@ -127,6 +137,24 @@ A conta **precisa** fechar em inteiros. A implementação atual converte para XT
 casas com `Decimal.js` e volta para mutez com `Math.floor(tez * 1e6)` — e `Math.floor(0,29 × 1e6)`
 dá 289 999, não 290 000. Erro sistemático, sempre contra o delegador. Ver **AI-02**.
 
+**Duas parcelas, uma comissão (decidido em DP-12).** O delegador pode ter saldo *delegado* e saldo
+*stakeado*, que rendem de forma diferente. **A comissão do TAPS incide apenas sobre a recompensa da
+parcela delegada.** A parcela stakeada é remunerada pelo *edge* do baker, definido e cobrado pelo
+próprio protocolo (RR-08) — o TAPS não cobra por cima dele.
+
+```
+delegador com recompensa delegada 5 432 100 e stakeada 2 000 000, comissão 500 bp:
+
+parcela delegada:  floor(5 432 100 × 9 500 / 10 000) = 5 160 495   (baker retém 271 605)
+parcela stakeada:                                      2 000 000   (comissão 0 — o edge já é do baker)
+pago ao delegador:                                     7 160 495 mutez
+```
+
+**Borda da regra.** Se a apuração devolver as duas parcelas somadas num único campo, não existe
+cálculo correto possível: aplicar a comissão sobre o total cobra duas vezes a parcela stakeada, e
+não aplicar entrega de graça a delegada. Nesse caso a distribuição **falha alto** — nunca escolhe
+um dos dois erros. Como as parcelas são expostas é RR-08.
+
 ---
 
 ### RN-04 — A comissão é a única retenção sobre o delegador
@@ -144,10 +172,11 @@ débito total na carteira do baker        = 10 035 897 mutez
 
 **Borda.** Delegador com direito a 12 mutez: o baker gasta 1 800 mutez de taxa para entregar
 12 mutez — 150× o valor pago. A regra continua válida (o delegador recebe 12), mas ela só é
-sustentável com um valor mínimo de pagamento, que **não existe**. Ver **DP-01**.
+sustentável com um valor mínimo de pagamento — que passa a existir em **RN-24**.
 
-> A taxa de rede sai da carteira do baker. Essa é a resposta à pergunta "quem paga a taxa".
-> Ela é uma decisão de produto e pode ser mudada — ver **DP-02**.
+> **Decidido (DP-02): a taxa de rede sai da carteira do baker e continua assim.** O delegador
+> recebe o valor líquido cheio. É o que ele assume ao comparar comissões entre bakers, e descontar
+> a taxa dele faria o valor recebido depender do preço de gas do dia.
 
 ---
 
@@ -190,7 +219,7 @@ pagável e a distribuição é executada para ele.
 **Borda.** Sistema desligado durante três ciclos: a rede está em 804 e o local em 800. A regra
 processa **apenas o 800** e grava 804 como novo pendente — os ciclos 801, 802 e 803 ficam sem
 pagamento e sem registro de que foram pulados. O comportamento correto seria processar a fila
-inteira, um ciclo por vez, em ordem. Ver **DP-07**.
+inteira, um ciclo por vez, em ordem — que é o que **RN-28** determina.
 
 ---
 
@@ -210,6 +239,34 @@ cycle 801 → rewards_pending   total           0   opHash null
 **Borda.** A chave natural do banco atual é `(baker_id, cycle, date, result)`, que **permite** duas
 linhas `rewards_pending` para ciclos diferentes e, pior, duas linhas para o mesmo ciclo com datas
 diferentes. O invariante existe na documentação e não existe no esquema. Ver **AI-03**.
+
+---
+
+### RN-28 — Ciclo devido não se perde: existe fila
+
+**Enunciado.** Todo ciclo com recompensa devida e não paga entra numa fila processada em ordem
+crescente, um ciclo por vez; acima de um limite configurável de ciclos devidos o sistema **para** e
+pede confirmação humana antes de pagar qualquer um. *(decidido em DP-07)*
+
+**Exemplo.** Limite de segurança 3 ciclos. Sistema volta depois de uma parada e encontra os ciclos
+800, 801 e 802 devidos:
+
+```
+3 ciclos ≤ limite → processa em ordem
+  ciclo 800 → distribuição própria, lote próprio, hash próprio
+  ciclo 801 → só começa depois do 800 fechar
+  ciclo 802 → só começa depois do 801 fechar
+```
+
+Com 800, 801, 802 e 803 devidos (4 > 3), não paga nada: registra os quatro como devidos, informa o
+total acumulado e espera decisão do baker.
+
+**Borda.** Cada ciclo da fila é uma distribuição independente e idempotente (RN-12). Falha no 801
+**não** avança para o 802 — a fila para no ciclo que falhou e o estado vira RN-27. Pular um ciclo
+para "não travar a fila" é como se paga duas vezes ou se deixa de pagar sem ninguém notar.
+
+O limite existe pelo cenário concreto: voltar de uma viagem e ver a carteira esvaziar de uma vez,
+sem nenhum aviso, porque o sistema decidiu sozinho pagar uma semana de ciclos.
 
 ---
 
@@ -243,11 +300,18 @@ operações injetadas: 0
 Mudando para `on` e reprocessando o mesmo ciclo, os três valores são idênticos e aparece um
 `transaction_hash`.
 
+**`off` desliga tudo (decidido em DP-08).** Nenhum caminho de entrada — job periódico, API, CLI,
+disparo manual — distribui com o modo em `off`. Para pagar, o baker muda o modo explicitamente.
+Um sistema de dinheiro em que "desligado" ainda paga é a pior surpresa possível, e religar é um
+comando.
+
 **Borda.** O modo é lido no início do processamento e não é reconferido antes de injetar. Um baker
-que muda de `on` para `off` durante uma distribuição já iniciada tem o lote enviado assim mesmo.
-Além disso, hoje o disparo **manual** (`POST /payments/distribute/:cycle`) não consulta o modo: em
-`off`, o job periódico realmente não roda, mas o disparo manual executa e se comporta como
-`simulation`. Isso é ambíguo por acidente. Ver **DP-08**.
+que muda de `on` para `off` durante uma distribuição já iniciada tem o lote enviado assim mesmo —
+o modo precisa ser reconferido imediatamente antes da injeção, e não só na entrada.
+
+Comportamento atual, que viola a regra: o disparo manual (`POST /payments/distribute/:cycle`) não
+consulta o modo, então em `off` o job periódico não roda mas o disparo manual executa e se comporta
+como `simulation`.
 
 ---
 
@@ -266,7 +330,39 @@ log:                "Ignored tz1C... (value is 0)"
 
 **Borda.** Um delegador cujo saldo caiu a quase nada aparece em todo ciclo com valor 0, poluindo o
 relatório sem nunca receber. E a regra "zero não paga" é hoje o **único** filtro de poeira que
-existe: 1 mutez paga, 0 mutez não. Ver **DP-01**.
+existe: 1 mutez paga, 0 mutez não. O filtro de verdade é **RN-24**, que trata valor pequeno como
+dívida a acumular em vez de pagamento a fazer.
+
+---
+
+### RN-24 — Valor abaixo do mínimo vira dívida, não vira pó
+
+**Enunciado.** Um pagamento só entra no lote se o valor devido cobrir K vezes o custo estimado da
+transferência; abaixo desse corte o valor **não é descartado** — fica registrado como dívida do
+baker com aquele delegador e soma ao ciclo seguinte, até cruzar o corte. *(decidido em DP-01:
+corte relativo, com acúmulo)*
+
+O corte é relativo, não fixo, porque o custo da transferência muda com a precificação da rede
+(RR-06). K é configurável pelo baker.
+
+**Exemplo.** K = 3 e custo estimado de 1 800 mutez por transferência → corte de 5 400 mutez.
+
+| Ciclo | Devido no ciclo | Dívida acumulada | Paga? |
+|---|---:|---:|---|
+| 800 | 2 100 | 2 100 | não (2 100 < 5 400) |
+| 801 | 2 400 | 4 500 | não (4 500 < 5 400) |
+| 802 | 1 900 | 6 400 | **sim — paga 6 400, dívida zera** |
+
+Nenhum mutez foi perdido: 2 100 + 2 400 + 1 900 = 6 400 = valor pago. O invariante que precisa
+valer sempre é `soma paga + dívida em aberto == soma devida`.
+
+**Borda.** Delegador que para de delegar com dívida em aberto abaixo do corte: a dívida nunca mais
+cresce e nunca cruza o corte sozinha. Precisa de um caminho explícito de liquidação — pagamento
+avulso a pedido, aceitando que a taxa custe mais que o valor. A dívida é do baker; ela não expira
+por inatividade do delegador.
+
+Borda 2: o corte não é motivo para esconder o delegador do relatório. Ele aparece em todo ciclo com
+o devido do ciclo e a dívida acumulada, senão a regra vira "some com quem é pequeno".
 
 ---
 
@@ -292,7 +388,7 @@ problemático — conta não alocada, endereço inválido, limite de storage ins
 distribuição do ciclo inteiro e ninguém recebe. Acima de certo número de destinatários o lote
 também não cabe em uma operação e precisa ser dividido, o que quebra a atomicidade e cria o
 problema de "quais lotes já foram enviados". Limite e custo são **RR** (ver Parte 2); a política
-de divisão é **DP-05**.
+de divisão é **RN-26**.
 
 ---
 
@@ -357,33 +453,125 @@ pool `op3...`. Duas operações distintas, dois hashes, mesma data.
 
 **Borda.** Delegadores confirmados e bond pool falhando deixa o ciclo em estado misto — pago para
 uns, não pago para outros — que o modelo atual (um `result` por ciclo) **não consegue representar**.
-Ver **DP-06**.
+O estado que representa isso é **RN-27**.
+
+---
+
+### RN-25 — Sem saldo, não sai nada
+
+**Enunciado.** Antes de montar o lote, o sistema verifica que o saldo disponível da carteira cobre
+o total a pagar mais as taxas estimadas mais os custos de alocação de contas novas; faltando
+qualquer parte, **não envia nada**, marca o ciclo como bloqueado por saldo e avisa com o valor que
+falta. *(decidido em DP-14)*
+
+**Exemplo.** Ciclo com 42 destinatários, um deles em conta ainda não alocada. Supondo custo de
+transferência de 1 800 mutez e custo de alocação de 64 250 mutez, ambos lidos da cadeia (RR-05,
+RR-06):
+
+```
+a pagar                     118 450 000
+taxas    42 × 1 800       =      75 600
+alocação 1 × 64 250       =      64 250
+necessário                  118 589 850
+saldo disponível            118 500 000
+falta                            89 850  → não envia nada, avisa
+```
+
+**Borda.** Saldo suficiente na verificação e insuficiente na injeção, porque outra operação saiu da
+mesma carteira no intervalo. A rede rejeita, e o caso cai em RN-11 e RN-12 — nunca em pagamento
+pela metade silencioso. A verificação reduz a chance; ela não substitui a idempotência.
+
+Borda 2: "saldo disponível" não é o saldo total. Parte do saldo do baker pode estar congelada como
+depósito de segurança da própria atividade de baking; gastar isso é outro problema. Quanto do saldo
+é gastável é RR.
+
+---
+
+### RN-26 — Ciclo que não cabe em um lote é dividido de forma determinística
+
+**Enunciado.** Quando os pagamentos de um ciclo não cabem em uma única operação, eles são divididos
+em lotes por uma ordem estável e determinística, e **cada lote é persistido com seu índice e seu
+hash antes do envio**; a retomada continua do primeiro lote sem confirmação. *(decidido em DP-05)*
+
+O número de transferências por lote sai do limite de gas e de tamanho de operação lidos da cadeia
+(RR-04), nunca de uma constante escolhida.
+
+**Exemplo.** 250 destinatários, limite da cadeia comportando 90 transferências por operação:
+
+```
+lote 1/3  90 destinatários  op_a...  confirmado
+lote 2/3  90 destinatários  op_b...  confirmado
+lote 3/3  70 destinatários  op_c...  sem confirmação
+
+retomada: consulta op_a e op_b on-chain → aplicados, não reenvia
+          trata apenas o lote 3 conforme RN-12
+```
+
+**Borda.** A ordem precisa ser determinística — ordenação por endereço, por exemplo. Se a ordem
+variar entre execuções, a retomada monta lotes com composição diferente, o hash gravado não
+corresponde ao que seria reenviado, e a verificação de RN-12 perde o sentido. Ordem instável aqui é
+pagamento duplicado disfarçado.
+
+---
+
+### RN-27 — Ciclo pago pela metade tem estado próprio
+
+**Enunciado.** Um ciclo cujo pagamento começou e não completou fica em estado `parcialmente_pago`,
+que registra quais destinatários foram pagos, quanto saiu, quanto falta e o hash de cada lote; e
+enquanto existir ciclo parcial, **o ciclo seguinte não é distribuído**. *(decidido em DP-06)*
+
+**Exemplo.** Ciclo 800 com 250 destinatários, dois de três lotes confirmados (RN-26):
+
+```
+estado         parcialmente_pago
+pagos          180 de 250 destinatários
+saiu            94 000 000 mutez   lotes op_a..., op_b...
+falta           31 500 000 mutez   lote 3, sem hash confirmado
+ciclo 801      não distribui até o 800 sair do estado parcial
+```
+
+**Borda.** O mesmo estado cobre o caso de RN-13: delegadores confirmados e bond pool falhando
+depois. É um ciclo parcialmente pago, com a parte faltante identificada como sendo do pool.
+
+Borda 2: sair do estado parcial acontece por retomada bem-sucedida (RN-26) ou por decisão humana
+explícita registrada. **Nunca por expiração de tempo** — um ciclo não deixa de estar pela metade
+porque envelheceu.
 
 ---
 
 ## 1.5 Bond pool
 
-### RN-14 — O bond pool recebe o que sobra do ciclo
+### RN-14 — O bond pool recebe o que sobra do ciclo, sem a comissão do baker
 
-**Enunciado.** A base de rateio do bond pool é a recompensa total do ciclo menos o total
-efetivamente pago aos delegadores.
-
-```
-base_pool = recompensa_total_do_ciclo − total_pago_aos_delegadores
-```
-
-**Exemplo.** Recompensa total 100 000 000 mutez; pago aos delegadores 80 000 000:
+**Enunciado.** A base de rateio do bond pool é a recompensa total do ciclo menos a recompensa
+**bruta** dos delegadores; a comissão que o baker cobrou dos delegadores fica com o baker e não
+entra na base. *(decidido em DP-03)*
 
 ```
-base_pool = 20 000 000 mutez
+base_pool = recompensa_total_do_ciclo − recompensa_BRUTA_dos_delegadores
 ```
 
-**Borda.** Como o total pago aos delegadores é **líquido**, a comissão que o baker cobrou dos
-delegadores está dentro da base do pool — ou seja, a comissão do baker é rateada entre os membros
-do bond pool. Isso pode ser exatamente a intenção (o pool financia a operação e participa da
-receita) ou pode ser um efeito colateral nunca decidido. Ver **DP-03**.
+**Exemplo.** Recompensa total do ciclo 100 000 000 mutez; bruto dos delegadores 80 000 000;
+comissão 500 bp:
 
-Borda adicional: se a base der ≤ 0 (recompensa lida menor que o pago, o que acontece hoje sempre
+```
+pago aos delegadores   floor(80 000 000 × 9 500 / 10 000) =  76 000 000
+comissão do baker                                         =   4 000 000
+base do bond pool      100 000 000 − 80 000 000           =  20 000 000
+
+conferência: 76 000 000 + 4 000 000 + 20 000 000 = 100 000 000 ✔
+```
+
+Pela regra anterior — base = total − **líquido** — a base teria sido 24 000 000, e os 4 000 000 de
+comissão seriam rateados entre os membros do pool.
+
+**Por quê.** O pool aporta capital e deve render sobre capital. A comissão é a receita do baker por
+operar o serviço: apurar, pagar, atender delegador, manter o nó de pé. São duas remunerações com
+naturezas diferentes e não devem se misturar. Se em algum momento o bond pool passar a ser
+sociedade na operação, e não capital com retorno, esta regra muda — e é uma mudança de contrato com
+os membros do pool, não um ajuste de fórmula.
+
+**Borda.** Se a base der ≤ 0 (recompensa lida menor que o pago, o que acontece hoje sempre
 que a leitura de recompensa volta zerada), o bond pool **não distribui nada**. Nunca calcula
 valores negativos.
 
@@ -437,7 +625,8 @@ O gestor recebe 10 200 000 mutez em **duas** transferências, não uma.
 **Borda.** O gestor paga taxa administrativa sobre a própria cota e a recebe de volta na segunda
 transferência — resultado líquido idêntico a não cobrar dele, mas com duas transferências e duas
 taxas de rede. E se `adm_charge` do gestor for diferente da dos demais, a assimetria é invisível
-no relatório. Ver **DP-04**.
+no relatório — o extrato do pool precisa mostrar taxa retida e taxa recebida em linhas separadas,
+senão ninguém consegue conferir.
 
 ---
 
@@ -506,32 +695,56 @@ recebe; (b) endereços `tz4` são rejeitados pelo validador, então um delegador
 o pagamento de todos; (c) o lote é montado com `storageLimit: 0`, e uma conta não alocada consome
 storage — a operação inteira é rejeitada pela rede e ninguém recebe.
 
-Três caminhos distintos, mesmo resultado: **um delegador trava o ciclo**. O enunciado acima é a
-regra que queremos; a política concreta (pular / reter / pagar em separado) é **DP-04**.
+Três caminhos distintos, mesmo resultado: **um delegador trava o ciclo**.
+
+**Política decidida (DP-04).** Duas regras, nesta ordem:
+
+1. **Regra geral — pular e registrar.** Destinatário que não pode ser pago sai do lote com o motivo
+   registrado, e o valor devido a ele vira dívida em aberto (RN-24). O ciclo segue para todos os
+   outros. Nenhum endereço tem poder de impedir o pagamento de terceiros.
+2. **Exceção — conta não alocada cujo valor cobre o custo de alocação.** Aí vale pagar: sai em
+   operação separada do lote principal, com o custo de alocação absorvido pelo baker (RN-04), e o
+   delegador passa a receber normalmente nos ciclos seguintes.
+
+```
+custo de alocação lido da cadeia: 64 250 mutez
+
+delegador novo devendo 4 320 000 → 4 320 000 > 64 250 → paga em operação separada
+delegador novo devendo    30 000 →    30 000 < 64 250 → pula, vira dívida (RN-24)
+```
+
+**Borda da política.** "Pular e registrar" só é aceitável porque o valor vira dívida. Pular
+descartando o valor seria confiscar recompensa de delegador por um problema técnico do lado do
+baker.
 
 ---
 
-### RN-20 — Todo delegador conhecido tem comissão registrada
+### RN-20 — A comissão padrão é um valor vivo
 
-**Enunciado.** Ao detectar um delegador novo, o sistema cria para ele a linha de comissão com o
-valor padrão vigente, de modo que a comissão de qualquer delegador seja sempre consultável e
-auditável, e não inferida.
+**Enunciado.** A comissão padrão se aplica a todo delegador que não tenha exceção explícita
+registrada, inclusive aos já conhecidos; só existe linha individual em `delegatorsFee` quando
+alguém decidiu uma exceção para aquele endereço. *(decidido em DP-11)*
 
-**Exemplo.** Comissão padrão 500 bp. Delegador `tz1X` aparece pela primeira vez no ciclo 801:
+**Exemplo.** Baker com 40 delegadores, comissão padrão 500 bp, um VIP com exceção de 0 bp:
 
 ```
-delegatorsFee += (baker, tz1X, 500)
+delegatorsFee tem 1 linha, não 41:   (baker, tz1VIP, 0)
+
+mudando a padrão para 400 bp:
+  39 delegadores passam a 400 bp     (efeito imediato, é o que "padrão" quer dizer)
+  tz1VIP continua em 0 bp            (exceção explícita, não é tocada)
 ```
 
-Alterar a comissão padrão para 400 bp depois **não** muda `tz1X`: ele fica em 500 bp até ser
-alterado individualmente.
+Pela regra anterior — gravar a padrão vigente para cada delegador novo — a tabela teria 41 linhas e
+mudar a padrão não mudaria ninguém, que é o oposto do que o campo promete.
 
-**Borda.** É exatamente por isso que RN-01 ("padrão se aplica a quem não tem linha") e RN-20
-("todo mundo ganha linha") convivem mal: na prática, depois do primeiro ciclo quase ninguém usa o
-padrão, e mudar `default_fee` não tem o efeito que o baker espera. Ver **DP-11**.
+**Borda.** Suspender um delegador **não** é comissão de 100%. É estado próprio do delegador, com
+motivo registrado. Comissão e suspensão respondem perguntas diferentes: "quanto ele paga" e "ele
+está ativo". Um valor de comissão de 10 000 bp deve ser possível e deve significar apenas isso —
+comissão de 100% — nunca ser o mecanismo de desligar alguém.
 
-Borda 2: delegador que sai continua com linha em `delegatorsFee`. Se voltar meses depois, volta com
-a comissão antiga — não com a padrão atual. Isso é comportamento, não decisão: ninguém decidiu.
+Borda 2: delegador que sai e volta meses depois entra na comissão padrão vigente, não na antiga —
+porque não há linha individual para ele. É o comportamento esperado, e agora é por construção.
 
 ---
 
@@ -553,10 +766,24 @@ tz1delegator2...,3000000
 Pré-visualização: 2 destinatários, 8 000 000 mutez + 2 × 1 800 mutez de taxa = 8 003 600 mutez
 debitados da carteira do baker.
 
-**Borda.** O lote manual **não** é gravado em `delegatorsPayments` — vai só para arquivo de log.
-Consequência: não aparece em nenhum relatório, não entra na conciliação do ciclo, e um pagamento
-manual feito por engano em cima de um ciclo já pago é invisível para o sistema. Todo movimento de
-fundos deveria ter registro na mesma trilha. Ver **DP-10**.
+**O lote manual entra na trilha de auditoria (decidido em DP-10).** Ele é gravado com tipo de
+movimento próprio — `manual`, distinto de `pagamento_de_ciclo` — para aparecer no relatório e no
+extrato do delegador sem contaminar a conciliação por ciclo.
+
+```
+movimento  manual   2026-08-30  tz1delegator1...  5 000 000  op_x...
+movimento  manual   2026-08-30  tz1delegator2...  3 000 000  op_x...
+
+conciliação do ciclo 800: não inclui estes dois (tipo diferente)
+extrato de tz1delegator1: inclui, identificado como avulso
+```
+
+**Borda.** Sem o tipo distinto, um lote manual entra na soma do ciclo e faz a conciliação fechar
+errado; com o tipo distinto mas fora do extrato, o delegador reclama de um pagamento que o sistema
+diz não existir. Precisa das duas coisas: registrado e classificado.
+
+Borda 2: é por aqui que se liquida a dívida de um delegador que parou de delegar (RN-24). Pagamento
+avulso com registro, não transferência fora do sistema.
 
 ---
 
@@ -596,6 +823,45 @@ essa lista escrita no código (ver AI-10).
 
 ---
 
+## 1.8 Escopo da instalação
+
+### RN-29 — Uma instância do motor, um baker
+
+**Enunciado.** Uma instância do motor de payout atende exatamente um baker: uma carteira, um banco,
+um conjunto de configurações, um agendamento. Operar vários bakers é orquestrar várias instâncias —
+**nunca** filtrar por `baker_id` dentro de uma instância compartilhada. *(decidido em DP-13)*
+
+**Exemplo.** Host operando três bakers:
+
+```
+/dados/baker-a/   carteira A, banco A, config A   → instância A
+/dados/baker-b/   carteira B, banco B, config B   → instância B
+/dados/baker-c/   carteira C, banco C, config C   → instância C
+
+nenhuma consulta precisa de WHERE baker_id = ? para estar correta
+```
+
+**Por quê.** O isolamento passa a ser por processo e por sistema de arquivos, que é gratuito e não
+dá para esquecer, em vez de por predicado de consulta, que dá. Este não é um risco hipotético: hoje
+`getPendingRewardsCycle()` consulta o ciclo pendente **sem filtrar por baker**, e numa instalação
+compartilhada o job de um baker processaria o ciclo de outro. Com uma instância por baker, essa
+classe inteira de bug deixa de existir por construção.
+
+`baker_id` continua nos registros como identificação e auditoria. Deixa de ser chave de isolamento.
+
+**Borda.** Multi-baker é responsabilidade de quem orquestra as instâncias — host, CLI, agendador —
+e está **explicitamente fora** do motor. Onde isso importa: uma operação que precise de visão
+consolidada entre bakers (relatório agregado, carteira comum) não pertence ao motor e não pode ser
+resolvida abrindo uma exceção nesta regra. Consolidação é leitura, e leitura consolidada se faz
+fora, sobre os registros de cada instância.
+
+Borda 2: chave de assinatura por instância significa N chaves num host com N bakers. Isso é
+requisito de custódia, não detalhe de implantação — é assunto do núcleo criptográfico
+(BRES-37 / BRES-41), e a regra aqui não autoriza a saída fácil de passar frase-senha por variável
+de ambiente, que é como AI-13 nasceu.
+
+---
+
 # Parte 2 — Regras da rede (RR)
 
 **Estas regras não são nossas e não estão detalhadas aqui.** Elas vêm do levantamento de protocolo
@@ -609,17 +875,17 @@ virar constante literal.
 | RR-02 | Atraso até a recompensa do ciclo ficar disponível | RN-06 (qual ciclo é pagável) |
 | RR-03 | Finalidade de operação | RN-11, RN-12 (quando "não confirmada" vira "não existe") |
 | RR-04 | Limites de gas e storage por operação | RN-10 (quantas transferências cabem no lote) |
-| RR-05 | Custo de alocação de conta nova | RN-19 (destinatário não alocado), DP-01 |
-| RR-06 | Precificação de taxa de rede | RN-04 (custo por transferência), DP-01 |
+| RR-05 | Custo de alocação de conta nova | RN-19 (destinatário não alocado), RN-25 (saldo necessário) |
+| RR-06 | Precificação de taxa de rede | RN-04 (custo por transferência), RN-24 (corte relativo) |
 | RR-07 | Formatos de endereço válidos e pagáveis | RN-19, RN-23 |
-| RR-08 | Saldo *staked* vs *delegated* e o *edge* do baker | RN-03 (existem **duas** parcelas com rendimentos diferentes), DP-12 |
+| RR-08 | Saldo *staked* vs *delegated* e o *edge* do baker | RN-03 (duas parcelas; comissão só sobre a delegada) |
 | RR-09 | Paginação da API de indexação (recompensas, delegadores) | RN-01, RN-18 (quem entra na apuração) |
 
 Duas consequências que já são certas e valem registrar como restrição de domínio:
 
 1. **A apuração tem duas parcelas, não uma.** Com staking direto, a parcela delegada e a parcela
    stakeada rendem de forma diferente e precisam ser calculadas separadamente. Nenhuma regra deste
-   documento assume uma parcela só; RN-03 se aplica a cada parcela conforme **DP-12**.
+   documento assume uma parcela só; RN-03 diz qual delas leva comissão.
 2. **Truncamento silencioso de lista é erro de dinheiro.** Se a apuração de delegadores vier
    paginada e a leitura não iterar, o ciclo paga um subconjunto e reporta sucesso. Lista incompleta
    precisa falhar alto, com o número esperado e o obtido na mensagem.
@@ -697,105 +963,43 @@ vez de conflitar. É consequência do modelo, não intenção.
 
 ---
 
-# Parte 4 — Decisões pendentes (DP)
+# Parte 4 — Decisões tomadas
 
-**Nenhuma destas tem resposta no código ou na documentação.** Estão listadas com o que se sabe e
-com opções, sem resposta inventada. São de Rafael.
+Rafael respondeu as 14 decisões pendentes em **2026-08-30**, acatando as recomendações. Esta parte
+deixou de ser lista de perguntas: é o registro do que foi decidido e o ponteiro para a regra que
+carrega cada decisão. Onde a decisão criou regra nova, ela está na Parte 1.
 
-### DP-01 — Qual é o valor mínimo de pagamento?
-**Hoje não existe.** O único filtro é "zero não paga" (RN-09). Um delegador com direito a 12 mutez
-entra no lote e custa 1 800 mutez de taxa; se a conta dele ainda não for alocada, custa também o
-valor de alocação (RR-05), que é ordens de grandeza maior.
-**Opções:** (a) mínimo fixo em mutez, configurável; (b) mínimo relativo — só paga se o valor
-cobrir K× a taxa da transferência; (c) acumular o saldo devido entre ciclos e pagar quando cruzar
-o mínimo (exige registrar dívida acumulada por delegador — regra nova, tabela nova).
-**Recomendação:** (c) com piso configurável e padrão conservador; (a) é mais simples e perde o
-delegador pequeno para sempre.
+| # | Decisão | Onde virou regra |
+|---|---|---|
+| DP-01 | Valor abaixo do corte vira **dívida acumulada**, não é descartado. Corte relativo ao custo da transferência (K×), configurável. | **RN-24** (nova) |
+| DP-02 | A taxa de rede **continua saindo do baker**. Delegador recebe o líquido cheio. | RN-04 |
+| DP-03 | A comissão do baker **não entra** na base do bond pool: base = total − bruto dos delegadores. | RN-14 (alterada) |
+| DP-04 | Destinatário impagável: **pular e registrar**, valor vira dívida. Exceção: conta não alocada cujo valor cobre o custo de alocação é paga em operação separada. | RN-19 (alterada) |
+| DP-05 | Ciclo grande é dividido em **lotes determinísticos**, cada lote persistido com hash antes do envio. | **RN-26** (nova) |
+| DP-06 | Existe estado **`parcialmente_pago`** de primeira classe; ciclo parcial bloqueia o seguinte. | **RN-27** (nova) |
+| DP-07 | Ciclos devidos formam **fila em ordem**, com limite de segurança que exige confirmação humana. | **RN-28** (nova) |
+| DP-08 | **`off` desliga tudo**, inclusive o disparo manual. | RN-08 (alterada) |
+| DP-09 | **Não é decisão** — é fato a recuperar. Continua aberta, ver abaixo. | — |
+| DP-10 | Lote manual por CSV **entra na trilha**, com tipo de movimento próprio. | RN-21 (alterada) |
+| DP-11 | Comissão padrão é **valor vivo**; linha individual só para exceção explícita. Suspender delegador vira estado próprio. | RN-20 (invertida) |
+| DP-12 | Comissão incide **só sobre a parcela delegada**; a stakeada é remunerada pelo *edge* do protocolo. | RN-03 (ampliada) |
+| DP-13 | **Uma instância, um baker.** Multi-baker é orquestração de host, fora do motor. | **RN-29** (nova) |
+| DP-14 | **Sem saldo, não sai nada**: verificação antes de montar o lote, e avisa o que falta. | **RN-25** (nova) |
 
-### DP-02 — A taxa de rede continua saindo do baker?
-Hoje sai (RN-04). A alternativa é descontar do valor do delegador. Muda a economia do produto e
-muda o que o delegador vê. **Confirmar que fica como está** ou decidir a mudança — não é decisão
-técnica.
-
-### DP-03 — A comissão cobrada dos delegadores deve entrar na base do bond pool?
-Hoje entra, por construção (RN-14): a base é `total − pago aos delegadores`, e o pago é líquido.
-Isso significa que o baker rateia a própria comissão com os membros do pool. Pode ser a intenção.
-Nunca foi decidido explicitamente.
-
-### DP-04 — Delegador que não pode ser pago: pula, retém, ou trava o ciclo?
-Cenários distintos com respostas possivelmente distintas: endereço em formato desconhecido; tipo de
-endereço não suportado pela carteira; conta não alocada (paga-se o custo de alocação?); contrato
-(`KT1`) que pode rejeitar a transferência.
-**Opções:** (a) pular e registrar; (b) reter o valor e pagar no ciclo seguinte; (c) pagar em
-operação separada, aceitando o custo; (d) falhar o ciclo — que é o comportamento atual e o pior de
-todos.
-**Recomendação:** (a) para formato inválido, (c) para conta não alocada acima do mínimo de DP-01.
-Depende de DP-01.
-
-### DP-05 — Como dividir um ciclo que não cabe em um lote?
-Acima do limite da rede (RR-04) a distribuição precisa de vários lotes, e a atomicidade de RN-10 se
-perde. Precisa de: critério de divisão, registro de qual lote foi enviado, e o que significa "ciclo
-pago" quando 7 de 10 lotes confirmaram. Amarrado a DP-06 e a RN-12.
-
-### DP-06 — O que o baker vê quando um ciclo é pago pela metade?
-Hoje não há resposta: `payments.result` é um único valor por ciclo (`paid` ou `errors`), então
-"metade paga" não é representável. Um lote de vários que falha, ou um bond pool que falha depois de
-delegadores confirmados (RN-13), produzem exatamente esse estado.
-**Precisa decidir:** existe estado `partially_paid`? O que ele mostra — quantos pagos, quanto pago,
-quanto falta, quais hashes? Ele bloqueia o ciclo seguinte até resolução humana? A resposta define
-modelo de dados e interface.
-
-### DP-07 — Ciclos pulados enquanto o sistema esteve fora do ar
-RN-06 processa um ciclo por virada e descarta os intermediários. **Pagar retroativo por padrão?
-Nunca? Perguntar ao baker?** Um sistema parado por uma semana pode ter três ciclos devidos.
-
-### DP-08 — `off` significa "não paga automaticamente" ou "não paga de jeito nenhum"?
-Hoje o job periódico respeita `off`, mas o disparo manual não consulta o modo e se comporta como
-simulação. Ambíguo por acidente. Provavelmente `off` deveria bloquear também o disparo manual — mas
-isso remove a única forma de o baker forçar um pagamento com o automático desligado.
+## O que continua aberto
 
 ### DP-09 — O bond pool original pagava todos os membros ou só o gestor?
-O pseudocódigo de `BUSINESS_LOGIC.md` §2.2 ordena por `is_manager DESC` e faz `break` no gestor, o
-que encerraria o laço na primeira iteração. Ou o pseudocódigo está errado, ou o comportamento real
-era esse. **Verificável** contra o histórico do CFML ou contra pagamentos reais de um baker que
-usou bond pool. Enquanto não for verificado, RN-15/RN-16 descrevem a intenção documentada, não o
-comportamento observado.
 
-### DP-10 — O lote manual (CSV) entra na trilha de auditoria?
-Hoje só vai para arquivo (RN-21). Se entrar no banco, precisa de um tipo de movimento distinto de
-"pagamento de ciclo", senão contamina a conciliação por ciclo.
+Não é escolha de produto: é fato a recuperar. O pseudocódigo de `BUSINESS_LOGIC.md` §2.2 ordena os
+membros por `is_manager DESC` e faz `break` ao encontrar o gestor — lido literalmente, o laço
+encerra na primeira iteração e só o gestor recebe.
 
-### DP-11 — Comissão padrão: aplica retroativamente aos delegadores existentes?
-RN-20 grava a padrão vigente para cada delegador novo, então mudar `default_fee` não muda ninguém
-já cadastrado — provavelmente não é o que o baker espera ao editar "comissão padrão".
-**Opções:** (a) a padrão é um valor vivo e só existe linha individual para exceções explícitas
-(recomendado, e é o que RN-01 diz); (b) mantém como está e a interface deixa claro que a mudança
-vale só para novos.
-Relacionado: comissão de 100% como forma de suspender um delegador precisa ser um estado
-próprio, não um valor de comissão.
+Onde verificar: o histórico do git **antes** do commit `9116d30`, que removeu os arquivos
+ColdFusion do repositório; ou os pagamentos reais de um baker que usou bond pool.
 
-### DP-12 — Comissão sobre a parcela *stakeada*
-Com staking direto, o delegador tem duas parcelas com rendimentos distintos e o baker tem um *edge*
-definido pelo protocolo sobre a parcela stakeada (RR-08). **A comissão do TAPS incide sobre as
-duas? Só sobre a delegada? Existe uma comissão separada para cada?** Sem essa decisão não é
-possível calcular a recompensa corretamente no protocolo atual — é a pendência de maior impacto
-desta lista.
-
-### DP-13 — Uma instalação, um baker?
-Todo o modelo tem `baker_id` como chave, sugerindo multi-baker, mas a autenticação e várias
-consultas assumem instalação única (há consulta de ciclo pendente que não filtra por baker). Se
-multi-baker for suportado, isolamento entre bakers vira requisito de segurança, não detalhe.
-
-### DP-14 — O que fazer quando o saldo da carteira não cobre o ciclo?
-**Hoje não há verificação alguma:** o lote é montado, a rede rejeita, o laço de retentativa repete,
-o ciclo é marcado `errors` e ninguém recebe — sem que em nenhum momento a mensagem diga "faltou
-saldo".
-**A regra precisa ser decidida:** (a) verificar saldo ≥ total + taxas antes de montar e, faltando,
-não enviar nada e avisar; (b) pagar até onde o saldo alcança, por algum critério de ordem
-(proporcional? maiores primeiro? menores primeiro?) e deixar o resto devido; (c) pagar
-proporcionalmente a todos, reduzindo cada valor.
-**Recomendação:** (a). Pagamento parcial por falta de saldo cria dívida por delegador (DP-01c) e
-estado parcial (DP-06) de uma vez só, e nenhum dos dois existe hoje.
+Enquanto não for verificado, RN-15 e RN-16 descrevem a **intenção documentada**, não o
+comportamento observado. Se o comportamento real era pagar só o gestor, isso não muda as regras
+acima — muda o que se diz a quem usou o TAPS original.
 
 ---
 
@@ -809,5 +1013,10 @@ Uma implementação atende esta especificação quando:
 4. Nenhum campo de API externa é lido com valor padrão silencioso: campo esperado que não veio é
    erro alto com o nome do campo na mensagem (Parte 2, consequência 2).
 5. Toda validação escrita tem um caso que a faz reprovar.
-6. Cada DP está respondida ou explicitamente registrada como aberta na interface do baker — nunca
-   respondida por omissão no código.
+6. `soma paga a um delegador + dívida em aberto dele == soma devida a ele` em todos os ciclos
+   (RN-24). Nenhum mutez devido desaparece por ser pequeno.
+7. Nenhum destinatário isolado consegue impedir o pagamento dos demais (RN-19), e existe teste com
+   um endereço impagável no meio do ciclo que demonstra os outros recebendo.
+8. Um ciclo interrompido no meio é representável e visível como tal (RN-27) — nunca reportado como
+   `paid` nem como `errors` quando parte do dinheiro já saiu.
+9. Nenhuma consulta depende de `WHERE baker_id = ?` para estar correta (RN-29).
