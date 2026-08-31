@@ -48,6 +48,15 @@ export class ReferenceEngine implements PayoutEngine {
 
     const base = split.ownDelegatedBalance + split.externalDelegatedBalance;
     if (base <= 0n) throw new Error('base de delegação é zero — split inválido.');
+    // Divisão por zero num caminho que carrega dinheiro. Acontece de verdade: um split de
+    // ciclo futuro traz `externalDelegatedBalance = 0`, e basta um delegador na lista para
+    // o rateio estourar com `RangeError` em vez de dizer o que houve.
+    if (delegators.length > 0 && split.externalDelegatedBalance <= 0n) {
+      throw new Error(
+        `split tem ${delegators.length} delegador(es) mas externalDelegatedBalance é ` +
+          `${split.externalDelegatedBalance} — o rateio dividiria por zero. Split inconsistente.`,
+      );
+    }
 
     const ownShare = (pool * split.ownDelegatedBalance) / base;
     const grossExternal = pool - ownShare;

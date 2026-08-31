@@ -137,6 +137,26 @@ stake externo, por causa do `delegate_parameters_activation_delay`. A partir da�
 npm run run -- --split tzkt:<endereço-do-baker>/<ciclo>
 ```
 
+## A trava de ciclo
+
+`--split tzkt:<baker>/<ciclo>` recusa antes de ler qualquer número quando o ciclo não é
+distribuível. Três casos, todos verificados contra a Bakingnet real:
+
+| ciclo pedido | resposta |
+|---|---|
+| futuro | `ciclo 559 ainda não começou (ciclo corrente: 557)` |
+| corrente | `ciclo 557 ainda não é distribuível … Distribua a partir do ciclo 559` |
+| sem direitos | `TzKT não tem split para … (HTTP 204)` |
+
+A trava existe porque a TzKT devolve um split **legítimo e vazio** para ciclo futuro:
+`delegatorsCount = 0`, pool 0, nenhum campo inválido. Sem ela o harness reprovava — mas
+acusando a causa errada ("endereço tz4 rejeitado pela validação"), quando o motivo real
+era que o ciclo não tinha acontecido. Diagnóstico errado custa quase tanto quanto
+diagnóstico nenhum.
+
+A regra de N+2 é a janela de denúncia: `denunciation_period = 1` e `slashing_delay = 1`
+significam que uma denúncia do ciclo N ainda pode reduzir o valor durante N+1.
+
 ## A trava de rede
 
 `src/guard.ts` só aceita o `chain_id` de Bakingnet (`NetXvNVUNbWHxGt`), e essa constante

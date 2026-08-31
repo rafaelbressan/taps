@@ -105,6 +105,8 @@ export function syntheticSplit(cohort: Cohort, cycle: number, liquidPool: bigint
 
 export interface TzktSplitRaw {
   cycle: number;
+  futureBlocks?: number;
+  futureAttestations?: number;
   ownDelegatedBalance: number;
   externalDelegatedBalance: number;
   delegatorsCount: number;
@@ -126,6 +128,8 @@ export async function tzktSplit(
   baker: string,
   cycle: number,
 ): Promise<RewardSplit> {
+  await assertCycleDistributable(cfg, baker, cycle);
+
   const pageSize = 10_000;
   let head: TzktSplitRaw | undefined;
   const delegators: SplitDelegator[] = [];
@@ -196,6 +200,63 @@ export async function tzktSplit(
       stakedBalance: BigInt(st.stakedBalance),
     })),
   };
+}
+
+/**
+ * Recusa um ciclo que ainda não pode ser distribuído — **antes** de ler qualquer número.
+ *
+ * Duas condições, ambas do BRES-38 §3.7:
+ *   1. o ciclo precisa ter **fechado** (`futureBlocks`/`futureAttestations` zerados);
+ *   2. o ciclo N só se distribui depois que **N+2 começar**, por causa da janela de
+ *      denúncia — `denunciation_period = 1` e `slashing_delay = 1` significam que uma
+ *      denúncia do ciclo N ainda pode reduzir o valor durante N+1.
+ *
+ * Sem esta trava o harness lia o ciclo 559 (futuro) e recebia um split legítimo mas
+ * **vazio**: `delegatorsCount = 0`, pool 0. Nada nele é inválido, então nenhuma checagem
+ * de campo reprova — e os cenários acusavam causas erradas ("endereço tz4 rejeitado pela
+ * validação"), quando o motivo real era que o ciclo não tinha acontecido. Diagnóstico
+ * errado custa quase tanto quanto diagnóstico nenhum.
+ */
+export async function assertCycleDistributable(
+  cfg: HarnessConfig,
+  baker: string,
+  cycle: number,
+): Promise<void> {
+  const { body: head } = await fetchJson<{ cycle: number }>(`${cfg.tzktUrl}/v1/head`, {
+    timeoutMs: cfg.timeoutMs,
+  });
+  if (!head) throw new Error('TzKT não devolveu o head; não dá para saber se o ciclo fechou.');
+
+  if (cycle > head.cycle) {
+    throw new Error(
+      `ciclo ${cycle} ainda não começou (ciclo corrente: ${head.cycle}). ` +
+        `A TzKT devolve um split para ciclos futuros, com direitos e delegadores zerados — ` +
+        `ele é legítimo e é inútil para pagamento.`,
+    );
+  }
+  if (cycle + 2 > head.cycle) {
+    throw new Error(
+      `ciclo ${cycle} ainda não é distribuível (ciclo corrente: ${head.cycle}). ` +
+        `A recompensa do ciclo N é creditada no último bloco de N, mas só se distribui ` +
+        `depois que N+2 começar: uma denúncia de double-baking do ciclo N ainda pode ` +
+        `reduzir o valor durante N+1. Distribua a partir do ciclo ${cycle + 2}.`,
+    );
+  }
+
+  const { status, body } = await fetchJson<TzktSplitRaw>(
+    `${cfg.tzktUrl}/v1/rewards/split/${baker}/${cycle}?limit=0`,
+    { timeoutMs: cfg.timeoutMs },
+  );
+  if (status === 204 || !body) {
+    throw new Error(`TzKT não tem split para ${baker} no ciclo ${cycle} (HTTP ${status}).`);
+  }
+  const pending = (body.futureBlocks ?? 0) + (body.futureAttestations ?? 0);
+  if (pending > 0) {
+    throw new Error(
+      `ciclo ${cycle} não fechou: ainda há ${body.futureBlocks ?? 0} bloco(s) e ` +
+        `${body.futureAttestations ?? 0} atestação(ões) futuras. O valor final não existe ainda.`,
+    );
+  }
 }
 
 function assertField(obj: object, field: string, baker: string, cycle: number): void {
