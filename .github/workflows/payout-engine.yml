@@ -1,0 +1,48 @@
+name: Payout engine
+
+on:
+  push:
+    paths:
+      - 'packages/payout-engine/**'
+      - 'packages/tezos-chain/**'
+      - '.github/workflows/payout-engine.yml'
+  pull_request:
+    paths:
+      - 'packages/payout-engine/**'
+      - 'packages/tezos-chain/**'
+      - '.github/workflows/payout-engine.yml'
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      # The engine's tests run against the chain layer's SOURCE, so its
+      # dependencies have to be present too.
+      - name: Install the chain layer
+        working-directory: packages/tezos-chain
+        run: npm ci
+
+      - name: Install the payout engine
+        working-directory: packages/payout-engine
+        run: npm ci
+
+      # Three scanners, each with its own test proving it can fail:
+      # no protocol constant written down, no `number` in the money path,
+      # no local signing key anywhere in the package.
+      - name: Verify
+        working-directory: packages/payout-engine
+        run: npm run verify
+
+      - name: Build the chain layer
+        working-directory: packages/tezos-chain
+        run: npm run build
+
+      - name: Build
+        working-directory: packages/payout-engine
+        run: npm run build

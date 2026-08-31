@@ -18,6 +18,7 @@ A regra, escrita para não se perder: **código pode viver em branch enquanto a 
 | Diretório | O que é |
 |---|---|
 | [`../packages/tezos-chain/`](../packages/tezos-chain/) | `@tezos-suite/chain` — a camada de cadeia da suíte, compartilhada com o Tezzet. Especificada em SPEC-0002. Não importa nada do TAPS: extrair para repositório próprio é um `git mv` |
+| [`../packages/payout-engine/`](../packages/payout-engine/) | `@tezos-suite/payout` — o motor de payout (BRES-46). Idempotência por desenho: o hash existe antes da operação, nada é reenviado sem ler o estado do hash anterior na cadeia, e o banco impede a segunda distribuição do mesmo ciclo |
 | `../backend/` | O backend NestJS herdado. Não compila, e a reescrita passa por cima dele (ADR-0001 §6). A camada de cadeia dele é substituída pelo pacote acima |
 
 ## Documentos de suíte
@@ -38,5 +39,6 @@ O que a SPEC-0001 decide especificamente para o TAPS está resumido em [`spec/RE
 |---|---|
 | [`deployment/DEPLOYMENT_RUNBOOK.md`](deployment/DEPLOYMENT_RUNBOOK.md) | Runbook de deploy do sistema atual |
 | [`deployment/TROUBLESHOOTING.md`](deployment/TROUBLESHOOTING.md) | Diagnóstico do sistema atual |
+| [`deployment/BAKINGNET-PAYOUT-VALIDATION.md`](deployment/BAKINGNET-PAYOUT-VALIDATION.md) | O combinado para fechar o payout em Bakingnet: como subir o `octez-signer` (metade do Rafael) e como rodar o harness contra o motor de produção |
 
 Os dois descrevem o TAPS como serviço de nuvem. A ADR-0001 §4 recomenda **local-first**; quando isso for decidido, estes dois documentos são reescritos.
