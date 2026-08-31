@@ -105,13 +105,25 @@ Runs three source scanners before the tests: no protocol constant written
 down, no `number` in the money path, no local signing key anywhere. Each
 scanner has its own test proving it rejects a file that breaks its rule.
 
+## Running it against Bakingnet
+
+The QA harness (BRES-44) drives this engine directly:
+
+```
+npm run run -- --engine taps
+```
+
+Without the flag it runs its own reference oracle, which is what CI measures.
+The setup that has to exist first — the `octez-signer` host, the funded key —
+is written down in `docs/deployment/BAKINGNET-PAYOUT-VALIDATION.md`.
+
 ## What is not proven here
 
 A full payout on Bakingnet, reconciled against the chain, needs a funded key,
 a running `octez-signer` and network access. The arithmetic, the state machine
 and every refusal above are covered by unit tests, including a run with 60 258
-delegators; the end-to-end run is the QA harness's job (BRES-44) and has to
-happen on a host that has those three things.
+delegators and a resume that reads its state back from disk in a second
+process.
 
 The byte layout the client authenticator signs over must be confirmed against
 the deployed `octez-signer` before the first run that moves funds. A mismatch

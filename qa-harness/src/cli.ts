@@ -6,6 +6,7 @@
  *   npm run setup -- --stage baker  registra o delegado, stakeia e delega o coorte
  *   npm run run                   paga de verdade, reconcilia contra a cadeia
  *   npm run run -- --dry-run      só planeja; não injeta nada
+ *   npm run run -- --engine taps  roda o motor de produção (exige octez-signer no ar)
  *   npm run selftest              prova que os cenários conseguem reprovar
  *   npm run doctor                confere rede, endpoints e estado do coorte
  */
@@ -21,6 +22,17 @@ import { renderSelftest, selftest } from './selftest.ts';
 import { isMutantName, MUTANTS, type MutantName } from './payout/sabotage.ts';
 import { loadCohort } from './cohort.ts';
 import { audit, renderAudit } from './audit.ts';
+import type { EngineName } from './run.ts';
+
+/**
+ * `reference` é o oráculo do harness; `taps` é o motor de produção do BRES-46. O padrão
+ * continua sendo o oráculo — trocá-lo mudaria o que o CI mede sem ninguém pedir.
+ */
+function parseEngine(value: string | undefined): EngineName {
+  if (value === undefined || value === 'reference') return 'reference';
+  if (value === 'taps') return 'taps';
+  throw new Error(`--engine precisa ser reference ou taps, veio ${JSON.stringify(value)}.`);
+}
 
 const log = (msg: string): void => {
   process.stderr.write(`${msg}\n`);
@@ -86,6 +98,7 @@ async function main(): Promise<number> {
         mutants,
         dryRun: has(argv, 'dry-run'),
         offline: has(argv, 'offline'),
+        engine: parseEngine(flag(argv, 'engine')),
         log,
       });
       process.stdout.write(renderReport(report));

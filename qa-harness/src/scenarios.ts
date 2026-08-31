@@ -26,7 +26,7 @@ export interface ScenarioContext {
   /** Resultado da segunda execução idêntica. Vazio em `injected` é o que se espera. */
   secondRun: ExecutionResult;
   /** Resultado da retomada após morte simulada entre injeção e confirmação. */
-  crashResume: { injected: number; refused: boolean; message: string };
+  crashResume: { injected: number; refused: boolean; resolved?: boolean; message: string };
   transferFee: bigint;
   allocationBurn: bigint;
 }
@@ -401,7 +401,8 @@ export const SCENARIOS: Scenario[] = [
   {
     name: 'idempotencia-retomada-apos-morte',
     asserts:
-      'com o diário mostrando intenção sem confirmação, a retomada recusa em vez de pagar de novo',
+      'morto entre injetar e confirmar, a retomada não paga de novo: resolve o hash gravado ' +
+      'contra a cadeia, ou recusa — nunca reenvia, nunca cala',
     catches: ['idempotency'],
     check(ctx) {
       if (ctx.crashResume.injected > 0) {
@@ -411,11 +412,23 @@ export const SCENARIOS: Scenario[] = [
             `"não sei se pagou". É assim que se paga duas vezes.`,
         );
       }
+      // Duas saídas corretas, e a diferença entre elas é o que o motor gravou.
+      //
+      // Quem NÃO gravou o hash antes de injetar não sabe se pagou, e a única resposta
+      // segura é recusar. Quem gravou sabe: a RN-12 manda perguntar à cadeia e, se a
+      // operação está aplicada, fechar o ciclo como pago sem reenviar. Exigir recusa dos
+      // dois transformaria a limitação do oráculo em regra de negócio.
+      if (ctx.crashResume.resolved) {
+        return ok(
+          this.name,
+          `retomou sem reenviar: ${firstLine(ctx.crashResume.message)}`,
+        );
+      }
       if (!ctx.crashResume.refused) {
         return fail(
           this.name,
-          'a retomada não injetou, mas também não reclamou — silêncio sobre estado indeterminado ' +
-            'esconde o problema em vez de escalar.',
+          'a retomada não injetou, não resolveu o hash na cadeia e também não reclamou — ' +
+            'silêncio sobre estado indeterminado esconde o problema em vez de escalar.',
         );
       }
       return ok(this.name, `recusou e explicou: ${firstLine(ctx.crashResume.message)}`);

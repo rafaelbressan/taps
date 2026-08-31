@@ -1,6 +1,7 @@
 import { feeRate, type Mutez, type ProtocolConstants, type RewardSplit } from '@tezos-suite/chain';
 import { PayoutEngine, type EstimateTransfers, type RunRequest } from '../../src/engine';
 import { InMemoryPayoutStore } from '../../src/store/memory';
+import type { PayoutStore } from '../../src/store/types';
 import type { PayoutRpc, HeadRef, TransactionContent } from '../../src/chain/rpc';
 import {
   FakeChain,
@@ -50,7 +51,7 @@ export interface HarnessOptions {
   readonly constants?: ProtocolConstants;
   readonly estimate?: EstimateTransfers;
   readonly feeMutez?: Mutez;
-  readonly store?: InMemoryPayoutStore;
+  readonly store?: PayoutStore;
   readonly chain?: FakeChain;
   readonly headCycle?: number;
   readonly confirmationPolls?: number;
@@ -59,7 +60,7 @@ export interface HarnessOptions {
 
 export interface Harness {
   readonly engine: PayoutEngine;
-  readonly store: InMemoryPayoutStore;
+  readonly store: PayoutStore;
   readonly chain: FakeChain;
   readonly injector: FakeInjector;
   readonly signer: FakeSigner;

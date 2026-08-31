@@ -9,12 +9,14 @@ import { join } from 'node:path';
 import { TezosToolkit } from '@taquito/taquito';
 import { InMemorySigner } from '@taquito/signer';
 import type { HarnessConfig } from './config.ts';
-import { RpcClient } from './chain/rpc.ts';
+import { RpcClient, type ProtocolConstants } from './chain/rpc.ts';
 import { TzktClient } from './chain/tzkt.ts';
 import { Journal } from './chain/journal.ts';
 import { Batcher } from './chain/batcher.ts';
 import { reconcile, type Reconciliation } from './chain/reconcile.ts';
 import { ReferenceEngine } from './payout/reference-engine.ts';
+import { TapsEngine } from './payout/taps-engine.ts';
+import { loadPayoutLimits } from '@tezos-suite/payout';
 import { Sabotage, type MutantName } from './payout/sabotage.ts';
 import { syntheticSplit, tuneDustBalance, tzktSplit } from './payout/split-source.ts';
 import type { PayoutPolicy, RewardSplit } from './payout/types.ts';
@@ -34,7 +36,37 @@ export interface RunOptions {
    * É o que roda num CI de PR — sem chave, sem faucet, sem baker provisionado.
    */
   offline: boolean;
+  /**
+   * Qual motor exercitar. `reference` é o oráculo do harness; `taps` é o motor de
+   * produção do BRES-46, que assina num octez-signer remoto e por isso exige rede.
+   */
+  engine?: EngineName;
   log: (msg: string) => void;
+}
+
+export type EngineName = 'reference' | 'taps';
+
+/**
+ * O contrato mínimo que `run` precisa de um motor. `simulateCrash` é opcional porque
+ * cada motor deixa um estado diferente ao morrer entre injetar e confirmar, e só ele
+ * sabe reproduzi-lo.
+ */
+type RunnableEngine = {
+  readonly name: string;
+  plan: ReferenceEngine['plan'];
+  execute: ReferenceEngine['execute'];
+  simulateCrash?: (
+    plan: Parameters<ReferenceEngine['execute']>[0],
+  ) => Promise<CrashResume>;
+};
+
+export interface CrashResume {
+  injected: number;
+  /** Recusou explicitamente — correto para quem não gravou o hash e não sabe. */
+  refused: boolean;
+  /** Resolveu o hash gravado contra a cadeia e fechou sem reenviar (RN-12). */
+  resolved?: boolean;
+  message: string;
 }
 
 export interface RunReport {
@@ -79,6 +111,8 @@ interface Wiring {
   fee: bigint;
   allocationBurn: bigint;
   gasPerTransfer: bigint;
+  /** Ausente no modo offline: sem cadeia, não há constante lida da cadeia. */
+  constants?: ProtocolConstants;
   /** Ausente no modo offline: sem cadeia, não há o que reconciliar. */
   chain?: { rpc: RpcClient; tzkt: TzktClient };
 }
@@ -141,6 +175,7 @@ async function wireBakingnet(
     fee,
     allocationBurn,
     gasPerTransfer: batcher.gasPerTransfer,
+    constants,
     chain: { rpc, tzkt },
   };
 }
@@ -220,7 +255,8 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     carryOver,
   };
 
-  const engine = new ReferenceEngine(sender, sabotage);
+  const engine = buildEngine(cfg, wired, opts, sabotage);
+  opts.log(`motor sob teste: ${engine.name}`);
   const plan = engine.plan(split, policy);
 
   // A outra metade da regra de poeira: acumular sem nunca pagar é o mesmo que não pagar.
@@ -238,7 +274,12 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
 
   let execution = { injected: [], skipped: [] } as Awaited<ReturnType<typeof engine.execute>>;
   let secondRun = { injected: [], skipped: [] } as typeof execution;
-  let crashResume = { injected: 0, refused: false, message: 'não executado (dry-run)' };
+  let crashResume: CrashResume = {
+    injected: 0,
+    refused: false,
+    resolved: false,
+    message: 'não executado (dry-run)',
+  };
 
   if (!noChain) {
     opts.log('executando a distribuição na cadeia...');
@@ -249,7 +290,12 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     secondRun = await engine.execute(plan);
     opts.log(`segunda execução: ${secondRun.injected.length} injeções, ${secondRun.skipped.length} puladas`);
 
-    crashResume = await simulateCrashResume(cfg, engine, plan, opts.log);
+    // Cada motor deixa um estado diferente ao morrer entre injetar e confirmar. O
+    // oráculo trunca o diário; o motor de produção já gravou o hash. Quem sabe
+    // reproduzir a própria morte é o motor.
+    crashResume = engine.simulateCrash
+      ? await engine.simulateCrash(plan)
+      : await simulateCrashResume(cfg, engine as ReferenceEngine, plan, opts.log);
   }
 
   const reconciliation = wired.chain
@@ -341,7 +387,7 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
  * para o ciclo seguinte" é indistinguível de "some".
  */
 function simulateDustPayout(
-  engine: ReferenceEngine,
+  engine: RunnableEngine,
   split: RewardSplit,
   policy: PayoutPolicy,
   cohort: Awaited<ReturnType<typeof loadCohort>>,
@@ -358,6 +404,48 @@ function simulateDustPayout(
   const line = replan.payments.find((p) => p.address === member.address);
   if (!line) return null;
   return { address: member.address, seeded, amount: line.amount, carriedOut: line.carriedOut };
+}
+
+/**
+ * Escolhe o motor. O padrão continua sendo o oráculo: o harness precisa dele para os
+ * mutantes, e trocar o padrão mudaria o que o CI mede sem ninguém pedir.
+ */
+function buildEngine(
+  cfg: HarnessConfig,
+  wired: Wiring,
+  opts: RunOptions,
+  sabotage: Sabotage,
+): RunnableEngine {
+  const name = opts.engine ?? 'reference';
+  if (name === 'reference') return new ReferenceEngine(wired.sender, sabotage);
+
+  if (!wired.constants || !wired.chain) {
+    throw new Error(
+      'o motor `taps` assina num octez-signer remoto e confere o hash na cadeia: ' +
+        'não roda em --offline nem sem RPC.',
+    );
+  }
+  if (!sabotage.isClean) {
+    // Os mutantes moram no oráculo, por desenho: sabotar o motor de produção seria
+    // testar um código que ninguém vai rodar.
+    throw new Error('--sabotage só se aplica ao motor `reference`.');
+  }
+
+  return new TapsEngine({
+    cfg,
+    constants: wired.constants,
+    chainId: wired.network.chainId,
+    protocolHash: wired.network.protocol,
+    bakerAddress: wired.cohort.baker.address,
+    sender: wired.sender,
+    gasPerTransfer: wired.gasPerTransfer,
+    allocationBurn: wired.allocationBurn,
+    actor: process.env.TAPS_QA_ACTOR ?? 'qa-harness',
+    source: `qa-harness@${process.env.HOSTNAME ?? 'unknown-host'}`,
+    // Sem teto configurado isto lança com a mensagem certa. Um teto que ninguém
+    // escolheu não é teto, e um zero silencioso recusaria tudo sem dizer por quê.
+    cycleCapMutez: loadPayoutLimits().cycleCapMutez,
+  });
 }
 
 /**

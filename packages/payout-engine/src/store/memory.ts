@@ -15,6 +15,22 @@ import type {
   StoredAuditEvent,
 } from './types';
 
+/** The store's whole contents, in a shape a file or a table can hold. */
+export interface StoreState {
+  readonly distributions: readonly {
+    readonly id: string;
+    readonly distribution: DistributionRecord;
+    readonly lines: readonly DelegatorLineRecord[];
+    readonly batches: readonly BatchRecord[];
+  }[];
+  readonly carryOver: readonly {
+    readonly bakerId: string;
+    readonly balances: readonly (readonly [string, Mutez])[];
+  }[];
+  readonly operationHashes: readonly (readonly [string, string])[];
+  readonly audit: readonly StoredAuditEvent[];
+}
+
 interface DistributionState {
   distribution: DistributionRecord;
   lines: Map<string, DelegatorLineRecord>;
@@ -41,9 +57,6 @@ export class InMemoryPayoutStore implements PayoutStore {
   private readonly carryOver = new Map<string, Map<string, Mutez>>();
   private readonly operationHashes = new Map<string, string>();
   private readonly audit: StoredAuditEvent[] = [];
-
-  /** Test hook: how many times a hash was written. Never used by the engine. */
-  readonly injectionIntents: InjectionIntent[] = [];
 
   async getDistribution(
     bakerId: string,
@@ -152,7 +165,6 @@ export class InMemoryPayoutStore implements PayoutStore {
     }
 
     this.operationHashes.set(intent.opHash, self);
-    this.injectionIntents.push(intent);
     state.batches.set(intent.index, {
       ...batch,
       status: 'pending',
@@ -250,14 +262,49 @@ export class InMemoryPayoutStore implements PayoutStore {
     );
   }
 
-  /** Test hook: the carry-over ledger as the store holds it. */
-  carryOverOf(bakerId: string): Map<string, Mutez> {
-    return new Map(this.carryOver.get(bakerId) ?? []);
+  /**
+   * The whole state, for a durable wrapper to write down. Kept here rather
+   * than reimplemented next to a file or a table so that the constraints
+   * above have exactly one implementation and one set of tests.
+   */
+  snapshotState(): StoreState {
+    return {
+      distributions: [...this.distributions.entries()].map(([id, state]) => ({
+        id,
+        distribution: state.distribution,
+        lines: [...state.lines.values()],
+        batches: [...state.batches.values()],
+      })),
+      carryOver: [...this.carryOver.entries()].map(([bakerId, balances]) => ({
+        bakerId,
+        balances: [...balances.entries()],
+      })),
+      operationHashes: [...this.operationHashes.entries()],
+      audit: [...this.audit],
+    };
   }
 
-  /** Test hook: seed balances owed from cycles that predate this store. */
-  seedCarryOver(bakerId: string, balances: ReadonlyMap<string, Mutez>): void {
-    this.carryOver.set(bakerId, new Map(balances));
+  /** The inverse of `snapshotState`. Replaces everything the store holds. */
+  restoreState(state: StoreState): void {
+    this.distributions.clear();
+    this.carryOver.clear();
+    this.operationHashes.clear();
+    this.audit.length = 0;
+
+    for (const entry of state.distributions) {
+      this.distributions.set(entry.id, {
+        distribution: entry.distribution,
+        lines: new Map(entry.lines.map((line) => [line.address, line])),
+        batches: new Map(entry.batches.map((batch) => [batch.index, batch])),
+      });
+    }
+    for (const entry of state.carryOver) {
+      this.carryOver.set(entry.bakerId, new Map(entry.balances));
+    }
+    for (const [hash, owner] of state.operationHashes) {
+      this.operationHashes.set(hash, owner);
+    }
+    this.audit.push(...state.audit);
   }
 
   private requireState(bakerId: string, cycle: number): DistributionState {

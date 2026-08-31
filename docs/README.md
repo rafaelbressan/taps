@@ -39,5 +39,6 @@ O que a SPEC-0001 decide especificamente para o TAPS está resumido em [`spec/RE
 |---|---|
 | [`deployment/DEPLOYMENT_RUNBOOK.md`](deployment/DEPLOYMENT_RUNBOOK.md) | Runbook de deploy do sistema atual |
 | [`deployment/TROUBLESHOOTING.md`](deployment/TROUBLESHOOTING.md) | Diagnóstico do sistema atual |
+| [`deployment/BAKINGNET-PAYOUT-VALIDATION.md`](deployment/BAKINGNET-PAYOUT-VALIDATION.md) | O combinado para fechar o payout em Bakingnet: como subir o `octez-signer` (metade do Rafael) e como rodar o harness contra o motor de produção |
 
 Os dois descrevem o TAPS como serviço de nuvem. A ADR-0001 §4 recomenda **local-first**; quando isso for decidido, estes dois documentos são reescritos.
