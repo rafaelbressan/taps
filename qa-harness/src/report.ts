@@ -7,6 +7,7 @@ import type { RunReport } from './run.ts';
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
 const DIM = '\x1b[2m';
+const YELLOW = '\x1b[33m';
 const BOLD = '\x1b[1m';
 const OFF = '\x1b[0m';
 
@@ -68,14 +69,21 @@ export function renderReport(r: RunReport, useColor = process.stdout.isTTY): str
 
   L.push(c(BOLD, 'Cenários'));
   for (const s of r.scenarios) {
-    const mark = s.ok ? c(GREEN, 'passa ') : c(RED, 'REPROVA');
+    const mark =
+      s.status === 'pass' ? c(GREEN, 'passa ') : s.status === 'fail' ? c(RED, 'REPROVA') : c(YELLOW, 'n/a   ');
     L.push(`  ${mark} ${s.name}`);
     for (const line of s.evidence.split('\n')) L.push(c(DIM, `          ${line}`));
   }
   L.push('');
 
-  const failed = r.scenarios.filter((s) => !s.ok);
-  if (r.passed) {
+  const failed = r.scenarios.filter((s) => s.status === 'fail');
+  const skipped = r.scenarios.filter((s) => s.status === 'n/a').length;
+  if (r.passed && skipped > 0) {
+    L.push(
+      c(GREEN, `${r.scenarios.length - skipped} de ${r.scenarios.length} cenários exercitados, nenhum reprovou`) +
+        c(YELLOW, ` — ${skipped} não se aplicam a esta rodada.`),
+    );
+  } else if (r.passed) {
     L.push(c(GREEN, `${r.scenarios.length} cenários, nenhum reprovado.`));
   } else {
     L.push(c(RED, `${failed.length} de ${r.scenarios.length} cenários reprovaram: ${failed.map((s) => s.name).join(', ')}`));

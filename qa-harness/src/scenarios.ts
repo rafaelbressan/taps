@@ -31,8 +31,18 @@ export interface ScenarioContext {
   allocationBurn: bigint;
 }
 
+/**
+ * Três estados. `n/a` é para o cenário que **esta rodada não exercitou** — rodar contra o
+ * split real de outro baker não põe o endereço tz4 do coorte em lugar nenhum, e cobrar
+ * isso como reprovação é ruído. Marcar como `passa` seria pior: o relatório diria verde
+ * onde não houve teste. A lição veio do `audit`, que cometeu os dois erros antes.
+ */
+export type ScenarioStatus = 'pass' | 'fail' | 'n/a';
+
 export interface ScenarioResult {
   name: string;
+  status: ScenarioStatus;
+  /** Conveniência de leitura: `n/a` não é reprovação. */
   ok: boolean;
   /** O que se observou. Uma linha, com número. */
   evidence: string;
@@ -47,8 +57,31 @@ export interface Scenario {
   check(ctx: ScenarioContext): ScenarioResult;
 }
 
-const ok = (name: string, evidence: string): ScenarioResult => ({ name, ok: true, evidence });
-const fail = (name: string, evidence: string): ScenarioResult => ({ name, ok: false, evidence });
+const ok = (name: string, evidence: string): ScenarioResult =>
+  ({ name, status: 'pass', ok: true, evidence });
+const fail = (name: string, evidence: string): ScenarioResult =>
+  ({ name, status: 'fail', ok: false, evidence });
+/** Não exercitado nesta rodada. Não é reprovação e não conta como prova. */
+const na = (name: string, why: string): ScenarioResult =>
+  ({ name, status: 'n/a', ok: true, evidence: why });
+
+/**
+ * Quanto sobra para os delegadores, recalculado do split — na ordem do BRES-38 §3.4.
+ * `taxa = bruto × num ÷ den` e `pagável = bruto − taxa`; escrever
+ * `bruto × (den − num) ÷ den` **não** é equivalente, porque a divisão é inteira.
+ */
+function expectedDistributable(ctx: ScenarioContext): bigint {
+  const pool = ctx.split.liquidPool + (ctx.policy.includeBlockFees ? ctx.split.blockFees : 0n);
+  const base = ctx.split.ownDelegatedBalance + ctx.split.externalDelegatedBalance;
+  if (base <= 0n) return 0n;
+  const grossExternal = pool - (pool * ctx.split.ownDelegatedBalance) / base;
+  return grossExternal - (grossExternal * ctx.policy.fee.num) / ctx.policy.fee.den;
+}
+
+/** O membro do coorte está neste split? Rodando contra split de terceiro, não está. */
+function inSplit(ctx: ScenarioContext, address: string): boolean {
+  return ctx.split.delegators.some((d) => d.address === address);
+}
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -97,6 +130,9 @@ export const SCENARIOS: Scenario[] = [
     check(ctx) {
       const member = ctx.cohort.members.find((m) => m.role === 'unallocated');
       if (!member) return fail(this.name, 'coorte sem membro `unallocated` — o caso de borda sumiu do coorte.');
+      if (!inSplit(ctx, member.address)) {
+        return na(this.name, 'o split desta rodada não é o do coorte; não há conta não alocada para exercitar');
+      }
       const planned = ctx.plan.payments.find((p) => p.address === member.address);
       if (!planned || planned.amount === 0n) {
         return fail(this.name, `${member.address} não recebeu valor no plano.`);
@@ -130,6 +166,9 @@ export const SCENARIOS: Scenario[] = [
     check(ctx) {
       const member = ctx.cohort.members.find((m) => m.role === 'tz4');
       if (!member) return fail(this.name, 'coorte sem membro tz4.');
+      if (!inSplit(ctx, member.address)) {
+        return na(this.name, 'o split desta rodada não é o do coorte; nenhum endereço tz4 no conjunto');
+      }
       if (validateAddress(member.address) !== ValidationResult.VALID) {
         return fail(this.name, `${member.address} não é um endereço válido — coorte mal gerado.`);
       }
@@ -160,6 +199,13 @@ export const SCENARIOS: Scenario[] = [
     catches: ['batch-cap'],
     check(ctx) {
       const paid = ctx.plan.payments.filter((p) => p.amount > 0n);
+      if (ctx.split.delegators.length <= 100) {
+        return na(
+          this.name,
+          `o split desta rodada tem ${ctx.split.delegators.length} delegadores; ` +
+            `não dá para exercitar o limite de 100`,
+        );
+      }
       if (paid.length <= 100) {
         const belowFloor = ctx.plan.payments.filter((p) => p.reason === 'below-floor').length;
         return fail(
@@ -192,6 +238,9 @@ export const SCENARIOS: Scenario[] = [
     check(ctx) {
       const member = ctx.cohort.members.find((m) => m.role === 'dust');
       if (!member) return fail(this.name, 'coorte sem membro `dust`.');
+      if (!inSplit(ctx, member.address)) {
+        return na(this.name, 'o split desta rodada não é o do coorte; nenhum valor de poeira plantado');
+      }
       const planned = ctx.plan.payments.find((p) => p.address === member.address);
       if (!planned) return fail(this.name, `${member.address} sumiu do plano.`);
 
@@ -245,33 +294,58 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: 'staker-nao-recebe-por-fora',
-    asserts: 'um staker não aparece no batch — o protocolo já creditou o rendimento dele',
+    asserts:
+      'nenhum endereço recebe por conta do saldo stakeado; quem também delega recebe só pelo delegado',
     catches: ['stakers-as-delegators'],
     check(ctx) {
       if (ctx.split.stakers.length === 0) {
-        return fail(
+        return na(
           this.name,
-          'o split não tem staker nenhum — sem um staker no conjunto, este cenário não ' +
-            'pode reprovar e portanto não prova nada.',
+          'o split desta rodada não tem staker; sem staker no conjunto o cenário não prova nada',
         );
       }
-      const planned = ctx.split.stakers
-        .map((st) => ctx.plan.payments.find((p) => p.address === st.address))
-        .filter((p): p is NonNullable<typeof p> => p !== undefined && p.amount > 0n);
 
-      if (planned.length > 0) {
-        const total = planned.reduce((a, p) => a + p.amount, 0n);
+      // A regra não é "staker fica fora do batch". Um mesmo endereço pode ter saldo
+      // delegado e saldo stakeado com o mesmo baker — nos bakers reais da Bakingnet é o
+      // caso comum —, e o saldo delegado **tem** de ser pago. O que não pode entrar na
+      // conta é o rendimento do stake, que o protocolo já creditou.
+      const distributable = expectedDistributable(ctx);
+      const offenders: string[] = [];
+      let excess = 0n;
+
+      for (const st of ctx.split.stakers) {
+        const delegated = ctx.split.delegators.find((d) => d.address === st.address);
+        const expected =
+          delegated === undefined
+            ? 0n
+            : (distributable * delegated.delegatedBalance) / ctx.split.externalDelegatedBalance;
+        const got = ctx.plan.payments
+          .filter((p) => p.address === st.address)
+          .reduce((a, p) => a + p.amount, 0n);
+        if (got > expected) {
+          offenders.push(st.address);
+          excess += got - expected;
+        }
+      }
+
+      if (offenders.length > 0) {
         return fail(
           this.name,
-          `${planned.length} staker(s) receberiam ${total} mutez por fora — pagamento duplicado: ` +
-            `o rendimento de stake (${ctx.split.stakedSharedRewards} mutez em *StakedShared) já ` +
-            `foi creditado pelo protocolo. Ex.: ${planned[0]!.address}.`,
+          `${offenders.length} staker(s) receberiam ${excess} mutez a mais do que o saldo ` +
+            `delegado justifica — pagamento duplicado: o rendimento de stake ` +
+            `(${ctx.split.stakedSharedRewards} mutez em *StakedShared) já foi creditado pelo ` +
+            `protocolo. Ex.: ${offenders[0]}.`,
         );
       }
+
+      const alsoDelegators = ctx.split.stakers.filter((st) =>
+        ctx.split.delegators.some((d) => d.address === st.address),
+      ).length;
       return ok(
         this.name,
-        `${ctx.split.stakers.length} staker(s) fora do batch; ${ctx.split.stakedSharedRewards} mutez ` +
-          `de rendimento de stake não entraram no pool`,
+        `${ctx.split.stakers.length} staker(s), ${alsoDelegators} deles também delegadores; ` +
+          `ninguém recebeu além do saldo delegado. ${ctx.split.stakedSharedRewards} mutez de ` +
+          `*StakedShared ficaram fora do pool`,
       );
     },
   },

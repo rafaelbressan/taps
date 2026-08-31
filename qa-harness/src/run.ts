@@ -287,7 +287,12 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
     try {
       return s.check(ctx);
     } catch (err) {
-      return { name: s.name, ok: false, evidence: `cenário lançou: ${err instanceof Error ? err.message : String(err)}` };
+      return {
+        name: s.name,
+        status: 'fail' as const,
+        ok: false,
+        evidence: `cenário lançou: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   });
 
@@ -326,7 +331,7 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
       notes: reconciliation.notes,
     },
     scenarios,
-    passed: scenarios.every((s) => s.ok),
+    passed: scenarios.every((s) => s.status !== 'fail'),
   };
 }
 

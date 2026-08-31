@@ -137,6 +137,34 @@ stake externo, por causa do `delegate_parameters_activation_delay`. A partir da�
 npm run run -- --split tzkt:<endereço-do-baker>/<ciclo>
 ```
 
+## A emenda: recompensa real, pagamento real
+
+As duas metades separadas não bastam. Pool sintético pago de verdade prova a mecânica do
+dinheiro; recompensa real conferida em papel prova a fórmula. O que fecha é rodar as duas
+juntas — e isso não exige rodar um baker:
+
+```bash
+npm run run -- --split tzkt:tz1XMiZwHpHZ8a1AfwRWKfzLskJgZNyV8PHs/555
+```
+
+Split de um ciclo **fechado** de um baker que realmente está bakando (números reais,
+delegadores reais, 3 stakers reais), plano calculado a partir dele, e o pagamento **feito
+de verdade** na Bakingnet a partir do baker de testes, reconciliado contra a cadeia.
+
+Rodado em 2026-08-31 — op
+[`oocauEEx7hPuDq6YkJ9rY53vYPywewDD5jypDi5bwo7m4Zdajpn`](https://bakingnet.tzkt.io/oocauEEx7hPuDq6YkJ9rY53vYPywewDD5jypDi5bwo7m4Zdajpn):
+
+```
+pool real 28 468 033 mutez → 21 262 826 pagos em 6 transferências, todas applied
+intenção == cadeia, conferido pela TzKT e pela RPC
+2ª execução: 0 injeções
+6 de 10 cenários exercitados, nenhum reprovou — 4 n/a (o split não é o do coorte)
+```
+
+Os quatro `n/a` são honestos: o split de outro baker não contém o endereço tz4 do coorte,
+nem a conta não alocada, nem o valor de poeira, e tem 6 delegadores em vez de 126. Esses
+casos são exercitados na rodada com coorte próprio; esta rodada prova a emenda.
+
 ## Auditoria de dado real (`audit`)
 
 ```bash

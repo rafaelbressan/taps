@@ -71,7 +71,7 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
     offline: opts.offline,
     log: (m) => opts.log(`  ${m}`),
   });
-  const baselineFailed = baseline.scenarios.filter((s) => !s.ok).map((s) => s.name);
+  const baselineFailed = baseline.scenarios.filter((s) => s.status === 'fail').map((s) => s.name);
   if (!baseline.passed) {
     return {
       baselinePassed: false,
@@ -105,7 +105,7 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
       thrown = err instanceof Error ? err.message : String(err);
     }
 
-    const failedScenarios = report ? report.scenarios.filter((s) => !s.ok).map((s) => s.name) : [];
+    const failedScenarios = report ? report.scenarios.filter((s) => s.status === 'fail').map((s) => s.name) : [];
     const caught = thrown !== undefined || (report !== undefined && !report.passed);
     const caughtByExpected = thrown !== undefined || failedScenarios.includes(meta.caughtBy);
 
@@ -115,7 +115,7 @@ export async function selftest(cfg: HarnessConfig, opts: SelftestOptions): Promi
       caught,
       expectedScenario: meta.caughtBy,
       failedScenarios,
-      failedEvidence: report ? report.scenarios.filter((sc) => !sc.ok).map((sc) => `${sc.name}: ${sc.evidence}`) : [],
+      failedEvidence: report ? report.scenarios.filter((sc) => sc.status === 'fail').map((sc) => `${sc.name}: ${sc.evidence}`) : [],
       caughtByExpected,
       detail: thrown
         ? `reprovou por exceção: ${thrown.split('\n')[0]!.slice(0, 180)}`
