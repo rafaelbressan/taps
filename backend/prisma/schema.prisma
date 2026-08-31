@@ -81,10 +81,19 @@ model Payment {
 
   settings        Settings @relation(fields: [bakerId], references: [bakerId], onDelete: Cascade)
 
+  // The key used to be (bakerId, cycle, date, result) ONLY, which lets the
+  // same cycle be written again tomorrow, or with another result: paying a
+  // cycle twice was a legal database state. One distribution per cycle is a
+  // constraint, not a convention.
+  //
+  // Applying this to an existing installation needs the duplicates resolved
+  // first:
+  //   SELECT baker_id, cycle, count(*) FROM payments
+  //   GROUP BY 1,2 HAVING count(*) > 1;
+  @@unique([bakerId, cycle])
   @@unique([bakerId, cycle, date, result])
   @@index([cycle])
   @@index([result])
-  @@index([bakerId, cycle])
   @@map("payments")
 }
 
@@ -150,4 +159,230 @@ model BondPoolMember {
   @@id([bakerId, address])
   @@index([isManager])
   @@map("bond_pool")
+}
+
+// ---------------------------------------------------------------------------
+// Payout engine (BRES-46)
+//
+// These tables are the persistence contract of `@tezos-suite/payout`. Three
+// properties are enforced here rather than in code, because a property the
+// application enforces is a property a second process can break:
+//
+//   1. one distribution per (baker_id, cycle)
+//   2. one row per operation hash, and an attempt is APPENDED, never replaced
+//   3. every monetary column is mutez as an integer — no Decimal, no float
+//
+// Amounts are BigInt (int8): the largest value the chain can hold is about
+// 1e15 mutez, four orders of magnitude below the column's ceiling.
+// ---------------------------------------------------------------------------
+
+enum PayoutDistributionStatus {
+  planned
+  sending
+  settled
+  failed
+  blocked
+}
+
+enum PayoutBatchStatus {
+  pending
+  injected
+  included
+  confirmed
+  failed
+  expired
+}
+
+enum PayoutLineResult {
+  planned
+  applied
+  deferred
+  failed
+}
+
+enum PayoutAuditOutcome {
+  ok
+  refused
+  error
+}
+
+model PayoutDistribution {
+  id     Int                      @id @default(autoincrement())
+  bakerId String                  @map("baker_id") @db.VarChar(50)
+  cycle  Int
+  status PayoutDistributionStatus @default(planned)
+
+  network      String @db.VarChar(50)
+  protocolHash String @map("protocol_hash") @db.VarChar(60)
+
+  poolMutez          BigInt @map("pool_mutez")
+  ownShareMutez      BigInt @map("own_share_mutez")
+  bakerFeeMutez      BigInt @map("baker_fee_mutez")
+  distributableMutez BigInt @map("distributable_mutez")
+  remainderMutez     BigInt @map("remainder_mutez")
+  totalToSendMutez   BigInt @map("total_to_send_mutez")
+
+  feeNumerator      BigInt  @map("fee_numerator")
+  feeDenominator    BigInt  @map("fee_denominator")
+  blockFeesIncluded Boolean @map("block_fees_included")
+  delegatorCount    Int     @map("delegator_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines   PayoutDelegatorLine[]
+  batches PayoutBatch[]
+
+  // The constraint that makes a duplicate payment impossible, not unlikely.
+  @@unique([bakerId, cycle])
+  @@index([status])
+  @@map("payout_distributions")
+}
+
+model PayoutDelegatorLine {
+  id             Int    @id @default(autoincrement())
+  distributionId Int    @map("distribution_id")
+  address        String @db.VarChar(60)
+
+  delegatedBalanceMutez BigInt @map("delegated_balance_mutez")
+  grossMutez            BigInt @map("gross_mutez")
+  commissionMutez       BigInt @map("commission_mutez")
+  netMutez              BigInt @map("net_mutez")
+  carriedInMutez        BigInt @map("carried_in_mutez")
+  payableMutez          BigInt @map("payable_mutez")
+  // The estimated fee used as the cut in THIS cycle. The network fee moves,
+  // so this is not reproducible afterwards: without the column, nobody can
+  // ever say truthfully why a delegator received what they received.
+  minimumMutez          BigInt @map("minimum_mutez")
+  withheldMutez         BigInt @map("withheld_mutez")
+  amountMutez           BigInt @map("amount_mutez")
+  carriedOutMutez       BigInt @map("carried_out_mutez")
+
+  emptied    Boolean
+  batchIndex Int?             @map("batch_index")
+  opHash     String?          @map("op_hash") @db.VarChar(70)
+  result     PayoutLineResult @default(planned)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  distribution PayoutDistribution @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+
+  @@unique([distributionId, address])
+  @@index([address])
+  @@index([opHash])
+  @@map("payout_delegator_lines")
+}
+
+model PayoutBatch {
+  id             Int               @id @default(autoincrement())
+  distributionId Int               @map("distribution_id")
+  index          Int
+  status         PayoutBatchStatus @default(pending)
+
+  // Written BEFORE injection. The only proof the money may already be gone.
+  opHash      String? @map("op_hash") @db.VarChar(70)
+  counter     String? @db.VarChar(40)
+  branch      String? @db.VarChar(60)
+  branchLevel Int?    @map("branch_level")
+
+  totalAmountMutez BigInt @map("total_amount_mutez")
+  totalFeesMutez   BigInt @map("total_fees_mutez")
+  totalBurnMutez   BigInt @map("total_burn_mutez")
+  totalGas         BigInt @map("total_gas")
+  totalStorage     BigInt @map("total_storage")
+
+  injectedAt    DateTime? @map("injected_at")
+  includedLevel Int?      @map("included_level")
+  confirmedAt   DateTime? @map("confirmed_at")
+  error         String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  distribution PayoutDistribution   @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+  transfers    PayoutBatchTransfer[]
+  attempts     PayoutBatchAttempt[]
+
+  @@unique([distributionId, index])
+  // A hash belongs to one batch and one only.
+  @@unique([opHash])
+  @@index([status])
+  @@map("payout_batches")
+}
+
+model PayoutBatchTransfer {
+  id      Int    @id @default(autoincrement())
+  batchId Int    @map("batch_id")
+  address String @db.VarChar(60)
+
+  amountMutez BigInt @map("amount_mutez")
+  feeMutez    BigInt @map("fee_mutez")
+  // Never 0 by assumption: an unallocated destination with storage_limit 0
+  // leaves the WHOLE batch backtracked, and the other recipients carry no
+  // error of their own.
+  gasLimit     BigInt @map("gas_limit")
+  storageLimit BigInt @map("storage_limit")
+  burnMutez    BigInt @map("burn_mutez")
+
+  batch PayoutBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, address])
+  @@index([address])
+  @@map("payout_batch_transfers")
+}
+
+model PayoutBatchAttempt {
+  id      Int    @id @default(autoincrement())
+  batchId Int    @map("batch_id")
+  opHash  String @map("op_hash") @db.VarChar(70)
+
+  counter     String   @db.VarChar(40)
+  branch      String   @db.VarChar(60)
+  branchLevel Int      @map("branch_level")
+  at          DateTime
+
+  batch PayoutBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  // Append-only by contract: there is no code path that deletes a row here.
+  // `clearPreviousAttempt()` in the legacy distributor did exactly that, and
+  // it destroyed the only evidence that the money may already have left.
+  @@unique([opHash])
+  @@index([batchId])
+  @@map("payout_batch_attempts")
+}
+
+model PayoutCarryOver {
+  bakerId String @map("baker_id") @db.VarChar(50)
+  address String @db.VarChar(60)
+  // Debt to the delegator, carried between cycles. Accumulating and never
+  // paying is the same as not paying.
+  balanceMutez BigInt @map("balance_mutez")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([bakerId, address])
+  @@map("payout_carry_over")
+}
+
+model PayoutAuditEvent {
+  id      Int                @id @default(autoincrement())
+  at      DateTime           @default(now())
+  bakerId String             @map("baker_id") @db.VarChar(50)
+  cycle   Int?
+  actor   String             @db.VarChar(120)
+  source  String             @db.VarChar(200)
+  action  String             @db.VarChar(60)
+  outcome PayoutAuditOutcome
+
+  params      Json
+  opHash      String? @map("op_hash") @db.VarChar(70)
+  amountMutez BigInt? @map("amount_mutez")
+  detail      String? @db.Text
+
+  @@index([bakerId, cycle])
+  @@index([action])
+  @@index([opHash])
+  @@map("payout_audit_events")
 }

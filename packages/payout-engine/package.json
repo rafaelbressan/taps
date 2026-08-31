@@ -1,0 +1,37 @@
+{
+  "name": "@tezos-suite/payout",
+  "version": "0.1.0",
+  "description": "Motor de payout do TAPS: idempotente por desenho, lote dimensionado por gas, m\u00ednimo vindo da estimativa e trilha de auditoria. Assina sempre por signer remoto \u2014 nunca guarda chave.",
+  "license": "MIT",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --config jest.config.js",
+    "check:constants": "node ../tezos-chain/scripts/check-no-protocol-constants.mjs src",
+    "check:money": "node scripts/check-no-number-money.mjs src",
+    "check:no-local-key": "node scripts/check-no-local-key.mjs src",
+    "verify": "npm run check:constants && npm run check:money && npm run check:no-local-key && npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@taquito/local-forging": "25.0.0",
+    "@taquito/taquito": "^25.0.0",
+    "@taquito/utils": "^25.0.0",
+    "@tezos-suite/chain": "file:../tezos-chain"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.5",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

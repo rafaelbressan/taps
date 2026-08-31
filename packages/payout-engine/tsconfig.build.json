@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "paths": { "@tezos-suite/chain": ["../tezos-chain/dist/index.d.ts"] }
+  },
+  "include": ["src/**/*.ts"]
+}

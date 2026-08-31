@@ -18,6 +18,7 @@ A regra, escrita para não se perder: **código pode viver em branch enquanto a 
 | Diretório | O que é |
 |---|---|
 | [`../packages/tezos-chain/`](../packages/tezos-chain/) | `@tezos-suite/chain` — a camada de cadeia da suíte, compartilhada com o Tezzet. Especificada em SPEC-0002. Não importa nada do TAPS: extrair para repositório próprio é um `git mv` |
+| [`../packages/payout-engine/`](../packages/payout-engine/) | `@tezos-suite/payout` — o motor de payout (BRES-46). Idempotência por desenho: o hash existe antes da operação, nada é reenviado sem ler o estado do hash anterior na cadeia, e o banco impede a segunda distribuição do mesmo ciclo |
 | `../backend/` | O backend NestJS herdado. Não compila, e a reescrita passa por cima dele (ADR-0001 §6). A camada de cadeia dele é substituída pelo pacote acima |
 
 ## Documentos de suíte
