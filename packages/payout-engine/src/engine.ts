@@ -19,20 +19,30 @@ import type { BatchInjector, BatchTransfer } from './chain/injector';
 import type { PayoutRpc } from './chain/rpc';
 import type { PayoutSigner } from './chain/signer';
 import {
+  NoOpenDebtError,
+  OpenSettlementError,
   PayoutBlockedError,
   PayoutUnresolvedError,
+  SettlementWindowError,
 } from './errors';
 import {
   allocationCost,
   assertCycleCap,
   assertDestinationsAllowed,
+  assertSettlementCap,
   assertStorageAllocationCovered,
   type PayoutLimits,
 } from './guard';
-import { makeMinimumPayout } from './minimum';
+import {
+  formatPayoutFactor,
+  makeMinimumPayout,
+  transferCost,
+  type PayoutFactor,
+} from './minimum';
 import { assertCycleDistributable } from './schedule';
 import type {
   BatchRecord,
+  DebtSettlementRecord,
   DistributionSnapshot,
   LineSettlement,
   PayoutStore,
@@ -51,8 +61,13 @@ import type {
 export interface EnginePolicy {
   readonly fee: FeeRate;
   readonly includeBlockFees: boolean;
-  /** The baker's own floor, in mutez. Never below the estimated fee. */
-  readonly bakerFloorMutez: Mutez;
+  /**
+   * K of RN-24: what is owed enters the batch only when it covers K times the
+   * estimated cost of that transfer. Relative, because the cost of a transfer
+   * moves with the network; the baker's, because the trade it makes — less
+   * waste in fees against a longer wait for the small delegator — is theirs.
+   */
+  readonly payoutFactor: PayoutFactor;
   readonly limits: PayoutLimits;
   /** Fraction of `hard_gas_limit_per_block` one batch may fill. */
   readonly blockGasUtilisationPercent?: number;
@@ -66,6 +81,38 @@ export interface RunRequest {
   /** From where: cli, scheduler, http + address. Also verbatim. */
   readonly source: string;
   readonly policy: EnginePolicy;
+}
+
+/**
+ * A request to pay open debt outside any cycle (RN-24, borda 1).
+ *
+ * `settlementId` is the idempotency key and is chosen by the caller — a date,
+ * a ticket number, whatever the baker will recognise a year later. Asking
+ * twice under the same id pays once.
+ */
+export interface DebtSettlementRequest {
+  readonly bakerId: string;
+  readonly settlementId: string;
+  /** Whose debt to pay. Each must have a balance on record, or the run stops. */
+  readonly addresses: readonly string[];
+  readonly actor: string;
+  readonly source: string;
+  /** Why a human asked for this. Goes into the audit trail verbatim. */
+  readonly reason: string;
+  readonly limits: PayoutLimits;
+  readonly blockGasUtilisationPercent?: number;
+}
+
+export interface DebtSettlementResult {
+  readonly bakerId: string;
+  readonly settlementId: string;
+  readonly status: DebtSettlementRecord['status'];
+  readonly opHash: string | null;
+  readonly paid: readonly { readonly address: string; readonly amountMutez: Mutez }[];
+  readonly totalPaid: Mutez;
+  /** Hashes injected by THIS call. Empty on a rerun — that is the proof. */
+  readonly injected: readonly string[];
+  readonly skipped: readonly string[];
 }
 
 export type EstimateTransfers = (
@@ -118,6 +165,12 @@ interface PlanningResult {
   readonly plan: PayoutPlan;
   readonly lines: DelegatorLine[];
   readonly transfers: EstimatedTransfer[];
+  /**
+   * What one transfer to each address cost this run. Persisted per line so
+   * that `minimum == ceil(K x cost)` stays checkable years later: the cut is
+   * only explainable if BOTH halves of it were written down.
+   */
+  readonly transferCostByAddress: ReadonlyMap<string, Mutez>;
 }
 
 export class PayoutEngine {
@@ -152,7 +205,7 @@ export class PayoutEngine {
       protocolHash: constants.protocolHash,
       feeNumerator: request.policy.fee.numerator.toString(),
       feeDenominator: request.policy.fee.denominator.toString(),
-      bakerFloorMutez: request.policy.bakerFloorMutez.toString(),
+      payoutFactor: formatPayoutFactor(request.policy.payoutFactor),
       cycleCapMutez: request.policy.limits.cycleCapMutez.toString(),
     });
 
@@ -193,6 +246,270 @@ export class PayoutEngine {
   }
 
   /**
+   * Pays an open debt on request (RN-24, borda 1).
+   *
+   * A delegator who stops delegating with a balance below the cut never earns
+   * again: the balance never grows, and so it never clears the cut on its
+   * own. The debt is the baker's and does not expire because the delegator
+   * went quiet, which leaves exactly one honest way out — someone decides to
+   * pay it, accepting that the fee may cost more than the amount it moves.
+   *
+   * Deliberately outside the automatic path and outside any cycle: it is
+   * reached only by a human, it belongs to no cycle's reconciliation, and it
+   * makes AT MOST ONE injection attempt. A settlement that expired or was
+   * rejected is not retried under the same name; the debt is still on record,
+   * and asking again is another decision, with another id.
+   */
+  async settleDebt(request: DebtSettlementRequest): Promise<DebtSettlementResult> {
+    const { store } = this.deps;
+    const constants = await this.deps.constants();
+
+    await this.record(request.bakerId, null, request.actor, request.source,
+      'settlement.requested', 'ok', {
+        settlementId: request.settlementId,
+        addresses: request.addresses,
+        reason: request.reason,
+      });
+
+    const existing = await store.getDebtSettlement(request.bakerId, request.settlementId);
+    if (existing?.status === 'settled') {
+      await this.record(request.bakerId, null, request.actor, request.source,
+        'settlement.skipped', 'ok', { settlementId: request.settlementId, reason: 'already settled' });
+      return settlementResult(existing, [], existing.opHash ? [existing.opHash] : []);
+    }
+    if (existing && (existing.status === 'failed' || existing.status === 'blocked')) {
+      throw new PayoutBlockedError(
+        request.bakerId,
+        null,
+        `debt settlement ${request.settlementId} ended "${existing.status}" ` +
+          `(${existing.error ?? 'no chain error recorded'}); the debt is still on record, and ` +
+          'asking again is a new decision under a new settlement id',
+      );
+    }
+
+    const record = existing ?? (await this.planSettlement(request, constants));
+    return this.sendSettlement(request, record, constants);
+  }
+
+  /** Everything that decides an amount, before anything is written or signed. */
+  private async planSettlement(
+    request: DebtSettlementRequest,
+    constants: ProtocolConstants,
+  ): Promise<DebtSettlementRecord> {
+    const { store } = this.deps;
+
+    // An open distribution has already read the carry-over it intends to pay.
+    // Paying it here as well is the double payment this engine exists to make
+    // impossible, so the window is closed rather than narrowed.
+    const statuses = await store.listCycleStatuses(request.bakerId);
+    const open = [...statuses.entries()]
+      .filter(([, status]) => status === 'planned' || status === 'sending')
+      .map(([cycle]) => cycle)
+      .sort((a, b) => a - b);
+    if (open.length > 0) throw new SettlementWindowError(request.bakerId, open);
+
+    const debts = await store.loadCarryOver(request.bakerId);
+    const recipients: Recipient[] = [];
+    for (const address of request.addresses) {
+      const owed = debts.get(address);
+      if (owed === undefined || owed <= 0n) {
+        throw new NoOpenDebtError(request.bakerId, address);
+      }
+      // An implicit account with no balance is not allocated, and paying it
+      // burns storage. Read per address rather than assumed: a `storage_limit`
+      // that is wrong by omission takes the whole operation down.
+      const balance = await this.deps.rpc.getBalance(address);
+      recipients.push({ address, amount: owed, emptied: balance === 0n });
+    }
+
+    const estimates = await this.deps.estimate(recipients);
+    const batchPlan = planBatches(estimates, constants, {
+      blockGasUtilisationPercent: request.blockGasUtilisationPercent,
+    });
+    if (batchPlan.batches.length !== 1) {
+      throw new PayoutBlockedError(
+        request.bakerId,
+        null,
+        `${request.addresses.length} debts do not fit one operation ` +
+          `(${batchPlan.batches.length} would be needed) — split the request, so that every ` +
+          'settlement is one operation whose hash answers for it entirely',
+      );
+    }
+    assertBatchesFit(batchPlan, constants);
+    assertSettlementCap(batchPlan.totalCost, request.limits, request.settlementId);
+    assertStorageAllocationCovered(
+      estimates,
+      new Set(recipients.filter((r) => r.emptied).map((r) => r.address)),
+      constants,
+    );
+    assertDestinationsAllowed(estimates, new Set(request.addresses), request.bakerId, null);
+
+    const balance = await this.deps.rpc.getBalance(await this.deps.signer.publicKeyHash());
+    assertBalanceCovers(batchPlan, balance);
+
+    const batch = batchPlan.batches[0]!;
+    return store.createDebtSettlement({
+      bakerId: request.bakerId,
+      settlementId: request.settlementId,
+      network: this.deps.network,
+      protocolHash: constants.protocolHash,
+      actor: request.actor,
+      reason: request.reason,
+      lines: batch.transfers.map((transfer) => ({
+        address: transfer.address,
+        amountMutez: transfer.amount,
+        feeMutez: transfer.feeMutez,
+        gasLimit: transfer.gasLimit,
+        storageLimit: transfer.storageLimit,
+        burnMutez: transfer.burnMutez,
+      })),
+      totalAmount: batch.totalAmount,
+      totalFees: batch.totalFees,
+      totalBurn: batch.totalBurn,
+    });
+  }
+
+  /**
+   * One attempt, in the order that makes it safe: check the destinations, ask
+   * for the signature, WRITE THE HASH, inject, then ask the chain.
+   */
+  private async sendSettlement(
+    request: DebtSettlementRequest,
+    planned: DebtSettlementRecord,
+    constants: ProtocolConstants,
+  ): Promise<DebtSettlementResult> {
+    const { store } = this.deps;
+    // Checked against what the HUMAN asked for, not against the record's own
+    // lines: a check whose condition restates how the value was built is the
+    // `validateCalculation()` of the current TAPS, which passed while every
+    // total was zero. On a resume this is the only thing standing between a
+    // tampered store and a signature for someone else's address.
+    const allowed = new Set(request.addresses);
+    const injected: string[] = [];
+    let record = planned;
+
+    if (record.opHash === null) {
+      const transfers: BatchTransfer[] = record.lines.map((line) => ({
+        address: line.address,
+        amount: line.amountMutez,
+        feeMutez: line.feeMutez,
+        gasLimit: line.gasLimit,
+        storageLimit: line.storageLimit,
+      }));
+      assertDestinationsAllowed(transfers, allowed, request.bakerId, null);
+
+      await this.record(request.bakerId, null, request.actor, request.source,
+        'settlement.signature.requested', 'ok', {
+          settlementId: request.settlementId,
+          destinations: transfers.map((t) => t.address),
+          amounts: transfers.map((t) => t.amount.toString()),
+          totalAmountMutez: record.totalAmount.toString(),
+        });
+
+      const prepared = await this.deps.injector.prepare(transfers);
+      await store.recordSettlementIntent({
+        bakerId: request.bakerId,
+        settlementId: request.settlementId,
+        opHash: prepared.opHash,
+        counter: prepared.firstCounter.toString(),
+        branch: prepared.branch,
+        branchLevel: prepared.branchLevel,
+        at: this.clock(),
+      });
+      await this.record(request.bakerId, null, request.actor, request.source,
+        'settlement.injection.recorded', 'ok', {
+          settlementId: request.settlementId,
+          opHash: prepared.opHash,
+          branchLevel: prepared.branchLevel,
+        });
+
+      await this.deps.injector.inject(prepared);
+      injected.push(prepared.opHash);
+      record =
+        (await store.getDebtSettlement(request.bakerId, request.settlementId)) ?? record;
+    }
+
+    const opHash = record.opHash;
+    const branchLevel = record.branchLevel;
+    if (opHash === null || branchLevel === null) {
+      throw new PayoutBlockedError(
+        request.bakerId,
+        null,
+        `debt settlement ${request.settlementId} has no recorded operation to wait for`,
+      );
+    }
+
+    let last: OperationOutcome | undefined;
+    for (let poll = 0; poll < this.confirmationPolls; poll += 1) {
+      const outcome = await this.deps.operations.resolve(opHash, branchLevel, constants);
+      last = outcome;
+
+      if (outcome.status === 'confirmed') {
+        const at = this.clock();
+        // Status and cleared debts in one write: a debt cleared without a
+        // confirmed operation is a debt silently forgiven.
+        await store.recordSettlementStatus({
+          bakerId: request.bakerId,
+          settlementId: request.settlementId,
+          status: 'settled',
+          includedLevel: outcome.level ?? null,
+          confirmedAt: at,
+          cleared: record.lines.map((line) => line.address),
+          at,
+        });
+        await this.record(request.bakerId, null, request.actor, request.source,
+          'settlement.settled', 'ok', {
+            settlementId: request.settlementId,
+            opHash,
+            totalAmountMutez: record.totalAmount.toString(),
+          });
+        const settled =
+          (await store.getDebtSettlement(request.bakerId, request.settlementId)) ?? record;
+        return settlementResult(settled, injected, injected.length > 0 ? [] : [opHash]);
+      }
+
+      if (outcome.status === 'failed' || outcome.status === 'expired') {
+        const at = this.clock();
+        await store.recordSettlementStatus({
+          bakerId: request.bakerId,
+          settlementId: request.settlementId,
+          status: 'failed',
+          includedLevel: outcome.level ?? null,
+          error: outcome.chainStatus ?? outcome.status,
+          at,
+        });
+        await this.record(request.bakerId, null, request.actor, request.source,
+          'settlement.failed', 'error', {
+            settlementId: request.settlementId,
+            opHash,
+            chainStatus: outcome.chainStatus ?? outcome.status,
+          });
+        const failed =
+          (await store.getDebtSettlement(request.bakerId, request.settlementId)) ?? record;
+        return settlementResult(failed, injected, []);
+      }
+
+      if (poll + 1 < this.confirmationPolls) await this.sleep(this.pollIntervalMs);
+    }
+
+    // Out of budget with the operation still live. The record stays `sending`
+    // on purpose: re-running the SAME id asks the chain about this hash again
+    // and never builds a second one.
+    await this.record(request.bakerId, null, request.actor, request.source,
+      'settlement.unresolved', 'error', {
+        settlementId: request.settlementId,
+        opHash,
+        status: last?.status ?? 'unknown',
+      });
+    throw new PayoutUnresolvedError(
+      request.bakerId,
+      null,
+      opHash,
+      last?.status ?? 'unknown',
+    );
+  }
+
+  /**
    * Everything that decides an amount, in one place, before anything is
    * written or signed. Ends with a single transactional write.
    */
@@ -203,8 +520,16 @@ export class PayoutEngine {
     const headCycle = await this.deps.headCycle();
     assertCycleDistributable(request.cycle, headCycle, constants);
 
+    // The other half of the window `planSettlement` closes. Everything below
+    // reads the carry-over; an in-flight settlement is already paying part of
+    // it and has cleared nothing yet.
+    const settlements = await this.deps.store.listOpenSettlements(request.bakerId);
+    if (settlements.length > 0) {
+      throw new OpenSettlementError(request.bakerId, settlements);
+    }
+
     const planning = await this.plan(request, constants);
-    const { split, plan, lines, transfers } = planning;
+    const { split, plan, lines, transfers, transferCostByAddress } = planning;
 
     const batchPlan = planBatches(transfers, constants, {
       blockGasUtilisationPercent: request.policy.blockGasUtilisationPercent,
@@ -230,6 +555,8 @@ export class PayoutEngine {
         totalToSend: plan.totalToSend,
         feeNumerator: request.policy.fee.numerator,
         feeDenominator: request.policy.fee.denominator,
+        payoutFactorNumerator: request.policy.payoutFactor.numerator,
+        payoutFactorDenominator: request.policy.payoutFactor.denominator,
         blockFeesIncluded: plan.blockFeesIncluded,
         delegatorCount: split.delegators.length,
       },
@@ -243,6 +570,7 @@ export class PayoutEngine {
         netMutez: line.net,
         carriedInMutez: line.carriedIn,
         payableMutez: line.payable,
+        transferCostMutez: transferCostByAddress.get(line.address) ?? 0n,
         minimumMutez: line.minimum,
         withheldMutez: line.withheld,
         amountMutez: line.amount,
@@ -278,6 +606,7 @@ export class PayoutEngine {
       batches: batchPlan.batches.length,
       totalCost: batchPlan.totalCost.toString(),
       bakerBalance: balance.toString(),
+      payoutFactor: formatPayoutFactor(request.policy.payoutFactor),
     });
 
     return snapshot;
@@ -315,21 +644,31 @@ export class PayoutEngine {
       }));
 
     const estimates = await this.deps.estimate(candidates);
-    const feeByAddress = new Map(estimates.map((e) => [e.address, e.feeMutez]));
+    const costs = {
+      feeByAddress: new Map(estimates.map((e) => [e.address, e.feeMutez])),
+      allocationBurn: allocationCost(constants),
+      factor: request.policy.payoutFactor,
+    };
 
     const plan = computePayout({
       split,
       fee: request.policy.fee,
       includeBlockFees: request.policy.includeBlockFees,
       carryIn,
-      minimumPayout: makeMinimumPayout({
-        feeByAddress,
-        allocationBurn: allocationCost(constants),
-        bakerFloor: request.policy.bakerFloorMutez,
-      }),
+      minimumPayout: makeMinimumPayout(costs),
     });
 
     const lines = buildDelegatorLines(split, plan, request.policy.fee);
+
+    const transferCostByAddress = new Map<string, Mutez>(
+      plan.entries.map((entry) => [
+        entry.address,
+        // A delegator with nothing owed was never priced, and pricing a
+        // transfer that will never exist would only make the estimation pass
+        // larger. Zero here means "not applicable", and the cut is zero too.
+        entry.payable > 0n ? transferCost(costs, entry.address, entry.emptied) : 0n,
+      ]),
+    );
 
     const paying = new Set(plan.toPay.map((entry) => entry.address));
     const transfers = estimates.filter((estimate) => paying.has(estimate.address));
@@ -349,12 +688,14 @@ export class PayoutEngine {
       await this.audit(request, 'delegator.withheld', 'ok', {
         address: excluded.address,
         payableMutez: excluded.payable.toString(),
+        transferCostMutez: (transferCostByAddress.get(excluded.address) ?? 0n).toString(),
+        payoutFactor: formatPayoutFactor(request.policy.payoutFactor),
         cutMutez: excluded.minimum.toString(),
         carriedOutMutez: excluded.carriedOut.toString(),
       });
     }
 
-    return { split, plan, lines, transfers };
+    return { split, plan, lines, transfers, transferCostByAddress };
   }
 
   /** Sends, resumes or skips every batch, in order, then settles once. */
@@ -663,18 +1004,39 @@ export class PayoutEngine {
     await this.audit(request, 'distribution.blocked', 'error', { reason });
   }
 
-  private async audit(
+  private audit(
     request: RunRequest,
+    action: string,
+    outcome: 'ok' | 'refused' | 'error',
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    return this.record(
+      request.bakerId,
+      request.cycle,
+      request.actor,
+      request.source,
+      action,
+      outcome,
+      params,
+    );
+  }
+
+  /** The audit write itself. `cycle: null` is the out-of-cycle settlement. */
+  private async record(
+    bakerId: string,
+    cycle: number | null,
+    actor: string,
+    source: string,
     action: string,
     outcome: 'ok' | 'refused' | 'error',
     params: Record<string, unknown>,
   ): Promise<void> {
     await this.deps.store.appendAudit({
       at: this.clock(),
-      bakerId: request.bakerId,
-      cycle: request.cycle,
-      actor: request.actor,
-      source: request.source,
+      bakerId,
+      cycle,
+      actor,
+      source,
       action,
       outcome,
       params,
@@ -732,6 +1094,28 @@ function toBatchTransfers(record: BatchRecord): BatchTransfer[] {
     gasLimit: transfer.gasLimit,
     storageLimit: transfer.storageLimit,
   }));
+}
+
+function settlementResult(
+  record: DebtSettlementRecord,
+  injected: readonly string[],
+  skipped: readonly string[],
+): DebtSettlementResult {
+  return {
+    bakerId: record.bakerId,
+    settlementId: record.settlementId,
+    status: record.status,
+    opHash: record.opHash,
+    paid: record.lines.map((line) => ({
+      address: line.address,
+      amountMutez: line.amountMutez,
+    })),
+    // What the operation carried. Only a `settled` record means it arrived —
+    // the amount is what was sent, not proof that it landed.
+    totalPaid: record.status === 'settled' ? record.totalAmount : 0n,
+    injected,
+    skipped,
+  };
 }
 
 function batchHashes(batches: readonly BatchRecord[]): string[] {

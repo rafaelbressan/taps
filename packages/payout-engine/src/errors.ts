@@ -43,14 +43,25 @@ export class DuplicateOperationError extends PayoutEngineError {
 export class PayoutBlockedError extends PayoutEngineError {
   constructor(
     readonly bakerId: string,
-    readonly cycle: number,
+    readonly cycle: number | null,
     reason: string,
   ) {
     super(
-      `${bakerId} cycle ${cycle} is blocked for human review: ${reason} — ` +
+      `${bakerId} ${where(cycle)} is blocked for human review: ${reason} — ` +
         'no operation will be resent automatically',
     );
   }
+}
+
+/**
+ * A cycle number, or the absence of one.
+ *
+ * The debt settlement of RN-24 belongs to no cycle — that is the point of it
+ * — and writing `cycle -1` into an operator-facing message would be a
+ * sentinel pretending to be a fact.
+ */
+function where(cycle: number | null): string {
+  return cycle === null ? 'an out-of-cycle debt settlement' : `cycle ${cycle}`;
 }
 
 /**
@@ -65,10 +76,10 @@ export class DestinationNotAllowedError extends PayoutEngineError {
   constructor(
     readonly address: string,
     readonly bakerId: string,
-    readonly cycle: number,
+    readonly cycle: number | null,
   ) {
     super(
-      `${address} is not a delegator of ${bakerId} in cycle ${cycle} — ` +
+      `${address} is not a destination ${bakerId} planned for ${where(cycle)} — ` +
         'refusing to request a signature for it',
     );
   }
@@ -144,13 +155,138 @@ export class MissingEstimateError extends PayoutEngineError {
 export class PayoutUnresolvedError extends PayoutEngineError {
   constructor(
     readonly bakerId: string,
-    readonly cycle: number,
+    readonly cycle: number | null,
     readonly opHash: string,
     readonly status: string,
   ) {
     super(
-      `${bakerId} cycle ${cycle}: operation ${opHash} is still "${status}" after the ` +
+      `${bakerId} ${where(cycle)}: operation ${opHash} is still "${status}" after the ` +
         'polling budget — the distribution stays open and will be resumed, never resent',
+    );
+  }
+}
+
+/**
+ * K is not a number this system may guess. Below 1 it would send payments
+ * that cost more than they carry; a zero denominator is not a ratio at all.
+ */
+export class InvalidPayoutFactorError extends PayoutEngineError {
+  constructor(
+    readonly numerator: bigint,
+    readonly denominator: bigint,
+    reason: string,
+  ) {
+    super(
+      `K = ${numerator}/${denominator} is not a usable payout factor: ${reason} — ` +
+        'RN-24 pays only what covers K times the estimated transfer cost',
+    );
+  }
+}
+
+/**
+ * More cycles are owed than the baker allowed to run unattended (RN-28).
+ *
+ * Not a failure: the cycles are still owed, still recorded, and nothing was
+ * injected. It is the alarm that exists for one concrete scenario — coming
+ * back from a trip to find the wallet emptied in one go because the system
+ * decided on its own to pay a week of cycles.
+ */
+export class OwedCyclesExceededError extends PayoutEngineError {
+  constructor(
+    readonly bakerId: string,
+    readonly owed: readonly number[],
+    readonly maxOwedCycles: number,
+  ) {
+    super(
+      `${bakerId} has ${owed.length} cycles owed (${owed.join(', ')}), over the configured ` +
+        `limit of ${maxOwedCycles} — nothing was injected; a human decides before any of ` +
+        'them is paid',
+    );
+  }
+}
+
+/**
+ * A debt settlement was asked for an address that owes nothing.
+ *
+ * Raised rather than skipped: the caller named an address on purpose, and a
+ * settlement that quietly pays nobody is the silent-success failure mode this
+ * engine exists to remove.
+ */
+export class NoOpenDebtError extends PayoutEngineError {
+  constructor(
+    readonly bakerId: string,
+    readonly address: string,
+  ) {
+    super(
+      `${bakerId} carries no open debt for ${address} — there is nothing to settle, ` +
+        'and paying zero would be a transfer that costs a fee and moves nothing',
+    );
+  }
+}
+
+/** The same settlement id was created twice. A store-level constraint. */
+export class DuplicateSettlementError extends PayoutEngineError {
+  constructor(
+    readonly bakerId: string,
+    readonly settlementId: string,
+  ) {
+    super(
+      `${bakerId} already has a debt settlement called ${settlementId} — ` +
+        'a second one under the same name would pay the same debt again',
+    );
+  }
+}
+
+/**
+ * A cycle was about to be planned while a debt settlement is in flight.
+ *
+ * The mirror of `SettlementWindowError`. Planning reads the carry-over, and
+ * the settlement is already paying part of it without having cleared anything
+ * yet — so both would pay the same debt. Only PLANNING is refused: a
+ * distribution already under way resumes normally, because its amounts were
+ * fixed before the settlement existed.
+ */
+export class OpenSettlementError extends PayoutEngineError {
+  constructor(
+    readonly bakerId: string,
+    readonly settlementIds: readonly string[],
+  ) {
+    super(
+      `${bakerId} has debt settlement(s) ${settlementIds.join(', ')} in flight — planning a ` +
+        'cycle now would read a balance one of them is already paying, and pay it twice',
+    );
+  }
+}
+
+/** A debt settlement would move more than the baker's configured ceiling. */
+export class SettlementCapExceededError extends PayoutEngineError {
+  constructor(
+    readonly totalMutez: bigint,
+    readonly capMutez: bigint,
+    readonly settlementId: string,
+  ) {
+    super(
+      `debt settlement ${settlementId} would move ${totalMutez} mutez, over the configured ` +
+        `ceiling of ${capMutez} mutez — explicit human approval required`,
+    );
+  }
+}
+
+/**
+ * A settlement was asked for while a cycle distribution is still open.
+ *
+ * The open distribution has already read the carry-over it is going to pay.
+ * Settling the same debt now would pay it twice — once here and once when
+ * that distribution lands.
+ */
+export class SettlementWindowError extends PayoutEngineError {
+  constructor(
+    readonly bakerId: string,
+    readonly cycles: readonly number[],
+  ) {
+    super(
+      `${bakerId} has open distributions for cycle(s) ${cycles.join(', ')} — settling a debt ` +
+        'now could pay it twice, because those runs already read the balance being settled',
     );
   }
 }

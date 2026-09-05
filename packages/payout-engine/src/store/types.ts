@@ -59,6 +59,17 @@ export interface DistributionRecord {
   readonly feeDenominator: bigint;
   readonly blockFeesIncluded: boolean;
 
+  /**
+   * K, the payout factor of RN-24, exactly as it was applied this cycle.
+   *
+   * Recorded for the same reason `minimumMutez` is recorded per line: the cut
+   * is `K × estimated cost`, and once the cycle is over neither half can be
+   * recovered from the chain. Without K written down, the cut of a past cycle
+   * stops being explainable — which is the whole reason the column exists.
+   */
+  readonly payoutFactorNumerator: bigint;
+  readonly payoutFactorDenominator: bigint;
+
   readonly delegatorCount: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -76,7 +87,17 @@ export interface DelegatorLineRecord {
   readonly netMutez: Mutez;
   readonly carriedInMutez: Mutez;
   readonly payableMutez: Mutez;
-  /** The estimated fee used as the cut this cycle. Not reproducible later. */
+  /**
+   * What one transfer to this address cost, as estimated this cycle: fee plus
+   * the allocation burn when the destination had to be created. Zero for a
+   * delegator with nothing owed, who was never priced.
+   */
+  readonly transferCostMutez: Mutez;
+  /**
+   * The cut applied this cycle — `K × transferCostMutez`, rounded up. Not
+   * reproducible later: the network fee moves, and nothing on chain records
+   * what the estimate was.
+   */
   readonly minimumMutez: Mutez;
   readonly withheldMutez: Mutez;
   readonly amountMutez: Mutez;
@@ -205,6 +226,112 @@ export interface Settlement {
   readonly at: Date;
 }
 
+/**
+ * Paying off an open debt on request (RN-24, borda 1).
+ *
+ * A delegator who stops delegating with a balance below the cut never earns
+ * again, so the balance never grows and never clears the cut on its own. The
+ * debt is the baker's and does not expire because the delegator went quiet:
+ * the only honest way out is an explicit, recorded, human-asked payment that
+ * accepts costing more in fee than it moves.
+ *
+ * It is deliberately NOT a cycle distribution: it belongs to no cycle, it
+ * must not appear in a cycle's reconciliation, and it must not be reachable
+ * by the automatic path. It keeps the one property that matters, though —
+ * the operation hash is durable before the operation exists.
+ */
+export type DebtSettlementStatus =
+  | 'planned'
+  | 'sending'
+  | 'settled'
+  | 'failed'
+  | 'blocked';
+
+export interface DebtSettlementLine {
+  readonly address: string;
+  /** The open debt being paid, in mutez. Exactly what was carried over. */
+  readonly amountMutez: Mutez;
+  readonly feeMutez: Mutez;
+  readonly gasLimit: bigint;
+  readonly storageLimit: bigint;
+  readonly burnMutez: Mutez;
+}
+
+export interface DebtSettlementRecord {
+  readonly bakerId: string;
+  /** Caller-chosen, unique per baker. This is the idempotency key. */
+  readonly settlementId: string;
+  readonly status: DebtSettlementStatus;
+
+  readonly network: string;
+  readonly protocolHash: string;
+  /** Who asked, and why. Verbatim in the audit trail. */
+  readonly actor: string;
+  readonly reason: string;
+
+  readonly lines: readonly DebtSettlementLine[];
+  readonly totalAmount: Mutez;
+  readonly totalFees: Mutez;
+  readonly totalBurn: Mutez;
+
+  readonly opHash: string | null;
+  readonly counter: string | null;
+  readonly branch: string | null;
+  readonly branchLevel: number | null;
+  readonly attempts: readonly SettlementIntent[];
+
+  readonly injectedAt: Date | null;
+  readonly includedLevel: number | null;
+  readonly confirmedAt: Date | null;
+  readonly error: string | null;
+
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+export type NewDebtSettlement = Omit<
+  DebtSettlementRecord,
+  | 'status'
+  | 'opHash'
+  | 'counter'
+  | 'branch'
+  | 'branchLevel'
+  | 'attempts'
+  | 'injectedAt'
+  | 'includedLevel'
+  | 'confirmedAt'
+  | 'error'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+/** The settlement's equivalent of `InjectionIntent`: durable before injection. */
+export interface SettlementIntent {
+  readonly bakerId: string;
+  readonly settlementId: string;
+  readonly opHash: string;
+  readonly counter: string;
+  readonly branch: string;
+  readonly branchLevel: number;
+  readonly at: Date;
+}
+
+export interface SettlementStatusUpdate {
+  readonly bakerId: string;
+  readonly settlementId: string;
+  readonly status: DebtSettlementStatus;
+  readonly includedLevel?: number | null;
+  readonly confirmedAt?: Date | null;
+  readonly error?: string | null;
+  /**
+   * Addresses whose debt this settlement cleared. Written in the SAME
+   * transaction as the status, and only on `settled`: a debt cleared without
+   * a confirmed operation is a debt silently forgiven.
+   */
+  readonly cleared?: readonly string[];
+  readonly at: Date;
+}
+
 export type AuditOutcome = 'ok' | 'refused' | 'error';
 
 /**
@@ -247,6 +374,16 @@ export interface PayoutStore {
    */
   createDistribution(input: NewDistribution): Promise<DistributionSnapshot>;
 
+  /**
+   * The status of every cycle this baker has a distribution for.
+   *
+   * The queue of RN-28 needs to know which cycles are already settled and
+   * which are not, and it needs it without materialising every delegator line
+   * of every cycle. Absence from this map means "never planned", which for a
+   * distributable cycle means "owed".
+   */
+  listCycleStatuses(bakerId: string): Promise<Map<number, DistributionStatus>>;
+
   /** Unpaid balances owed to delegators of this baker, from earlier cycles. */
   loadCarryOver(bakerId: string): Promise<Map<string, Mutez>>;
 
@@ -269,6 +406,33 @@ export interface PayoutStore {
 
   /** One transaction: line results, distribution status and carry-over. */
   settleDistribution(settlement: Settlement): Promise<void>;
+
+  /**
+   * One transaction. Raises `DuplicateSettlementError` when this
+   * `(bakerId, settlementId)` already exists — the constraint that makes the
+   * same debt payable exactly once by this path.
+   */
+  createDebtSettlement(input: NewDebtSettlement): Promise<DebtSettlementRecord>;
+
+  getDebtSettlement(
+    bakerId: string,
+    settlementId: string,
+  ): Promise<DebtSettlementRecord | undefined>;
+
+  /**
+   * Settlements that are planned or in flight.
+   *
+   * A cycle distribution must not be PLANNED while one of these is open: the
+   * plan reads the carry-over, the settlement is already paying part of it,
+   * and neither has cleared anything yet. Both would pay the same debt.
+   */
+  listOpenSettlements(bakerId: string): Promise<readonly string[]>;
+
+  /** Same contract as `recordInjectionIntent`, over the same hash namespace. */
+  recordSettlementIntent(intent: SettlementIntent): Promise<void>;
+
+  /** One transaction: settlement status and, on `settled`, the cleared debts. */
+  recordSettlementStatus(update: SettlementStatusUpdate): Promise<void>;
 
   appendAudit(event: AuditEvent): Promise<void>;
 

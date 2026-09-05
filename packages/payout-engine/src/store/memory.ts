@@ -1,17 +1,25 @@
 import { InvariantViolationError, type Mutez } from '@tezos-suite/chain';
-import { DuplicateDistributionError, DuplicateOperationError } from '../errors';
+import {
+  DuplicateDistributionError,
+  DuplicateOperationError,
+  DuplicateSettlementError,
+} from '../errors';
 import type {
   AuditEvent,
   BatchRecord,
   BatchStatusUpdate,
+  DebtSettlementRecord,
   DelegatorLineRecord,
   DistributionRecord,
   DistributionSnapshot,
   DistributionStatus,
   InjectionIntent,
+  NewDebtSettlement,
   NewDistribution,
   PayoutStore,
   Settlement,
+  SettlementIntent,
+  SettlementStatusUpdate,
   StoredAuditEvent,
 } from './types';
 
@@ -28,6 +36,7 @@ export interface StoreState {
     readonly balances: readonly (readonly [string, Mutez])[];
   }[];
   readonly operationHashes: readonly (readonly [string, string])[];
+  readonly settlements: readonly DebtSettlementRecord[];
   readonly audit: readonly StoredAuditEvent[];
 }
 
@@ -39,6 +48,10 @@ interface DistributionState {
 
 function key(bakerId: string, cycle: number): string {
   return `${bakerId}#${cycle}`;
+}
+
+function settlementKey(bakerId: string, settlementId: string): string {
+  return `${bakerId}#settlement:${settlementId}`;
 }
 
 /**
@@ -56,6 +69,7 @@ export class InMemoryPayoutStore implements PayoutStore {
   private readonly distributions = new Map<string, DistributionState>();
   private readonly carryOver = new Map<string, Map<string, Mutez>>();
   private readonly operationHashes = new Map<string, string>();
+  private readonly settlements = new Map<string, DebtSettlementRecord>();
   private readonly audit: StoredAuditEvent[] = [];
 
   async getDistribution(
@@ -129,6 +143,15 @@ export class InMemoryPayoutStore implements PayoutStore {
     };
     this.distributions.set(id, state);
     return snapshotOf(state);
+  }
+
+  async listCycleStatuses(bakerId: string): Promise<Map<number, DistributionStatus>> {
+    const statuses = new Map<number, DistributionStatus>();
+    for (const state of this.distributions.values()) {
+      if (state.distribution.bakerId !== bakerId) continue;
+      statuses.set(state.distribution.cycle, state.distribution.status);
+    }
+    return statuses;
   }
 
   async loadCarryOver(bakerId: string): Promise<Map<string, Mutez>> {
@@ -251,6 +274,135 @@ export class InMemoryPayoutStore implements PayoutStore {
     this.carryOver.set(settlement.bakerId, carry);
   }
 
+  async createDebtSettlement(input: NewDebtSettlement): Promise<DebtSettlementRecord> {
+    const id = settlementKey(input.bakerId, input.settlementId);
+    if (this.settlements.has(id)) {
+      throw new DuplicateSettlementError(input.bakerId, input.settlementId);
+    }
+    if (input.lines.length === 0) {
+      throw new InvariantViolationError(
+        'a debt settlement pays at least one address',
+        `${input.bakerId} asked for ${input.settlementId} with no lines`,
+      );
+    }
+
+    const now = new Date();
+    const record: DebtSettlementRecord = {
+      ...input,
+      status: 'planned',
+      opHash: null,
+      counter: null,
+      branch: null,
+      branchLevel: null,
+      attempts: [],
+      injectedAt: null,
+      includedLevel: null,
+      confirmedAt: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.settlements.set(id, record);
+    return record;
+  }
+
+  async getDebtSettlement(
+    bakerId: string,
+    settlementId: string,
+  ): Promise<DebtSettlementRecord | undefined> {
+    return this.settlements.get(settlementKey(bakerId, settlementId));
+  }
+
+  async listOpenSettlements(bakerId: string): Promise<readonly string[]> {
+    return [...this.settlements.values()]
+      .filter(
+        (record) =>
+          record.bakerId === bakerId &&
+          (record.status === 'planned' || record.status === 'sending'),
+      )
+      .map((record) => record.settlementId)
+      .sort();
+  }
+
+  async recordSettlementIntent(intent: SettlementIntent): Promise<void> {
+    const self = settlementKey(intent.bakerId, intent.settlementId);
+    const owner = this.operationHashes.get(intent.opHash);
+    if (owner !== undefined && owner !== self) {
+      throw new DuplicateOperationError(intent.opHash);
+    }
+
+    const record = this.requireSettlement(intent.bakerId, intent.settlementId);
+    // Same rule as a cycle batch: an earlier hash is evidence the money may
+    // already have left, so a second attempt is only recordable once the
+    // chain has said the first one can never land.
+    if (record.opHash !== null && record.opHash !== intent.opHash) {
+      if (record.status !== 'failed') {
+        throw new InvariantViolationError(
+          'a new settlement attempt needs the previous one failed',
+          `${self} carries ${record.opHash} in state "${record.status}"; ` +
+            `recording ${intent.opHash} now could pay the same debt twice`,
+        );
+      }
+    }
+
+    this.operationHashes.set(intent.opHash, self);
+    this.settlements.set(self, {
+      ...record,
+      status: 'sending',
+      opHash: intent.opHash,
+      counter: intent.counter,
+      branch: intent.branch,
+      branchLevel: intent.branchLevel,
+      attempts:
+        record.opHash === intent.opHash ? record.attempts : [...record.attempts, intent],
+      injectedAt: intent.at,
+      updatedAt: intent.at,
+    });
+  }
+
+  async recordSettlementStatus(update: SettlementStatusUpdate): Promise<void> {
+    const record = this.requireSettlement(update.bakerId, update.settlementId);
+
+    if (update.cleared && update.cleared.length > 0 && update.status !== 'settled') {
+      throw new InvariantViolationError(
+        'a debt is only cleared by a settled settlement',
+        `${update.settlementId} tried to clear ${update.cleared.length} debt(s) while ` +
+          `"${update.status}" — an unconfirmed clear is a debt silently forgiven`,
+      );
+    }
+
+    // Build first, commit last: the status and the cleared debts land together
+    // or not at all.
+    const carry = new Map(this.carryOver.get(update.bakerId) ?? []);
+    for (const address of update.cleared ?? []) {
+      const owed = carry.get(address);
+      if (owed === undefined) {
+        throw new InvariantViolationError(
+          'clearing a debt that is on record',
+          `${update.bakerId} carries no debt for ${address}`,
+        );
+      }
+      const line = record.lines.find((entry) => entry.address === address);
+      if (!line || line.amountMutez !== owed) {
+        throw new InvariantViolationError(
+          'the settled amount is exactly the debt on record',
+          `${address}: settlement paid ${line?.amountMutez ?? 'nothing'}, store carries ${owed}`,
+        );
+      }
+      carry.delete(address);
+    }
+
+    this.settlements.set(settlementKey(update.bakerId, update.settlementId), {
+      ...record,
+      status: update.status,
+      includedLevel: update.includedLevel ?? record.includedLevel,
+      confirmedAt: update.confirmedAt ?? record.confirmedAt,
+      error: update.error ?? record.error,
+      updatedAt: update.at,
+    });
+    this.carryOver.set(update.bakerId, carry);
+  }
+
   async appendAudit(event: AuditEvent): Promise<void> {
     this.audit.push({ ...event, id: this.audit.length + 1 });
   }
@@ -280,6 +432,7 @@ export class InMemoryPayoutStore implements PayoutStore {
         balances: [...balances.entries()],
       })),
       operationHashes: [...this.operationHashes.entries()],
+      settlements: [...this.settlements.values()],
       audit: [...this.audit],
     };
   }
@@ -289,6 +442,7 @@ export class InMemoryPayoutStore implements PayoutStore {
     this.distributions.clear();
     this.carryOver.clear();
     this.operationHashes.clear();
+    this.settlements.clear();
     this.audit.length = 0;
 
     for (const entry of state.distributions) {
@@ -304,7 +458,27 @@ export class InMemoryPayoutStore implements PayoutStore {
     for (const [hash, owner] of state.operationHashes) {
       this.operationHashes.set(hash, owner);
     }
+    // A store written before debt settlements existed has no `settlements`
+    // key. Reading it back is not the moment to invent one, but it IS the
+    // moment where an absent list means "none were ever made".
+    for (const settlement of state.settlements ?? []) {
+      this.settlements.set(
+        settlementKey(settlement.bakerId, settlement.settlementId),
+        settlement,
+      );
+    }
     this.audit.push(...state.audit);
+  }
+
+  private requireSettlement(bakerId: string, settlementId: string): DebtSettlementRecord {
+    const record = this.settlements.get(settlementKey(bakerId, settlementId));
+    if (!record) {
+      throw new InvariantViolationError(
+        'the settlement being written was created',
+        `${bakerId} has no debt settlement called ${settlementId}`,
+      );
+    }
+    return record;
   }
 
   private requireState(bakerId: string, cycle: number): DistributionState {

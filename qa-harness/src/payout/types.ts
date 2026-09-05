@@ -58,11 +58,11 @@ export interface PayoutPolicy {
   fee: FeeRational;
   includeBlockFees: boolean;
   /**
-   * Piso configurável por baker, em mutez. O piso **efetivo** é
-   * `max(minPayoutFloor, taxa estimada da própria transferência)` — decisão A do
-   * BRES-38 §3.6. Nunca uma constante de rede escrita no código.
+   * K da RN-24: o corte é `K × custo estimado da própria transferência`,
+   * arredondado para cima. Relativo, nunca um piso absoluto — o custo de
+   * transferir muda com a precificação da rede, e K é escolha do baker.
    */
-  minPayoutFloor: bigint;
+  payoutFactor: FeeRational;
   /** Saldo pendente herdado de ciclos anteriores, por endereço. */
   carryOver: Map<string, bigint>;
 }

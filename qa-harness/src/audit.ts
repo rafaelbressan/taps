@@ -107,7 +107,7 @@ export async function audit(
   const policy: PayoutPolicy = {
     fee: { num: opts.feeNum, den: opts.feeDen },
     includeBlockFees: false,
-    minPayoutFloor: 0n,
+    payoutFactor: { num: 1n, den: 1n },
     carryOver: new Map(),
   };
   const engine = new ReferenceEngine(new OfflineSender());

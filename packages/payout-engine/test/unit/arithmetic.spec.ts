@@ -1,6 +1,6 @@
 import { computePayout, feeRate, sumMutez, type Mutez } from '@tezos-suite/chain';
 import { buildDelegatorLines } from '../../src/breakdown';
-import { makeMinimumPayout } from '../../src/minimum';
+import { makeMinimumPayout, payoutFactor } from '../../src/minimum';
 import { tz1 } from '../helpers/addresses';
 import { delegator, makeSplit } from '../helpers/split';
 
@@ -64,7 +64,10 @@ describe('the payout arithmetic, over random inputs', () => {
         minimumPayout: makeMinimumPayout({
           feeByAddress: new Map(delegators.map((d) => [d.address, cut])),
           allocationBurn: BigInt(Math.floor(random() * 100_000)),
-          bakerFloor: 0n,
+          // K varies per round: "paid + open debt == owed" is a property of
+          // the rule, not of one cut. A K that only ever held at 1 would say
+          // nothing about the K a baker actually configures.
+          factor: payoutFactor(BigInt(1 + Math.floor(random() * 4)), 1n),
         }),
       });
       const lines = buildDelegatorLines(split, plan, fee);
