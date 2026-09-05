@@ -44,11 +44,11 @@ export interface SignerConfig {
    * `--require-authentication`. It is NOT the key that holds the funds and
    * moves no money on its own.
    *
-   * Optional because this client cannot yet satisfy that check — see
-   * `client-auth.ts`. Against a signer without `--require-authentication` it
-   * is not needed at all.
+   * Required. `--require-authentication` is a mainnet prerequisite, so a
+   * payout host with no client credential is misconfigured, not degraded —
+   * it stops at boot rather than at the first payout.
    */
-  readonly clientAuthKey?: string;
+  readonly clientAuthKey: string;
 }
 
 const SIGNER_URL_ENV = 'TAPS_SIGNER_URL';
@@ -110,7 +110,6 @@ export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): SignerCo
     'every signature comes from a remote octez-signer and there is no local key to fall back to',
   );
   assertSignerUrlAllowed(url);
-  const clientAuthKey = env[SIGNER_AUTH_ENV]?.trim();
   return {
     url,
     publicKeyHash: requireEnv(
@@ -118,24 +117,29 @@ export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): SignerCo
       SIGNER_PKH_ENV,
       'the payout address must be named explicitly, never discovered',
     ),
-    ...(clientAuthKey ? { clientAuthKey } : {}),
+    clientAuthKey: requireEnv(
+      env,
+      SIGNER_AUTH_ENV,
+      'the signer runs with --require-authentication and refuses an unsigned request',
+    ),
   };
 }
 
 export interface SignerRequest {
   readonly method: 'GET' | 'POST';
   readonly path: string;
+  /** The key the signature is asked of. Part of the authenticated bytes. */
+  readonly publicKeyHash: string;
   /** Hex of the watermarked bytes, for a signing request. */
-  readonly dataHex?: string;
+  readonly dataHex: string;
 }
 
 /**
  * Produces the `authentication=` query parameter the signer checks against
  * its `authorized key` list.
  *
- * It is a port with no default binding on purpose: the exact byte layout the
- * signer authenticates over must be confirmed against the signer host in use,
- * and a wrong guess here fails closed at deploy time rather than quietly.
+ * It stays a port so the byte layout can be pinned by a test and swapped for
+ * a future protocol without touching the HTTP client.
  */
 export interface SignerAuthenticator {
   authenticate(request: SignerRequest): Promise<string>;
@@ -186,6 +190,7 @@ export function createSignerTransport(config: SignerConfig): SignerTransport {
  * The signer is expected to be started with, explicitly:
  *   launch https signer <cert> <key>   TLS; the JSON API is TCP only
  *   --magic-bytes 0x03                 only generic operations
+ *   --require-authentication           only this client may ask
  * and WITHOUT `--allow-list-known-keys`, `--allow-to-prove-possession` or
  * `--password-filename` — the last one recreates, on the signer host, the
  * very defect the custody decision removes. Unlocking is interactive at
@@ -195,11 +200,11 @@ export class OctezRemoteSigner implements PayoutSigner {
   constructor(
     private readonly config: SignerConfig,
     /**
-     * Only for a signer started with `--require-authentication`. Omit it and
-     * no `authentication` parameter is sent, which is what a signer without
-     * that flag expects.
+     * Required. The signer runs with `--require-authentication`, so every
+     * request carries an `authentication` parameter; there is no mode here
+     * that sends none.
      */
-    private readonly authenticator: SignerAuthenticator | undefined,
+    private readonly authenticator: SignerAuthenticator,
     private readonly transport: SignerTransport = createSignerTransport(config),
   ) {}
 
@@ -210,15 +215,13 @@ export class OctezRemoteSigner implements PayoutSigner {
   async signOperation(forgedBytesHex: string): Promise<string> {
     const dataHex = `${GENERIC_OPERATION_WATERMARK}${stripHex(forgedBytesHex)}`;
     const path = `/keys/${this.config.publicKeyHash}`;
-    const authentication = await this.authenticator?.authenticate({
+    const authentication = await this.authenticator.authenticate({
       method: 'POST',
       path,
+      publicKeyHash: this.config.publicKeyHash,
       dataHex,
     });
-    const url =
-      authentication === undefined
-        ? path
-        : `${path}?authentication=${encodeURIComponent(authentication)}`;
+    const url = `${path}?authentication=${encodeURIComponent(authentication)}`;
 
     const response = await this.transport.send('POST', url, JSON.stringify(dataHex));
     if (response.status < 200 || response.status >= 300) {

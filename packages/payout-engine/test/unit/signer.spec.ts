@@ -1,22 +1,29 @@
+import { createPrivateKey, sign as nodeSign } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { b58Encode, PrefixV2 } from '@taquito/utils';
+import { b58DecodeAndCheckPrefix, b58Encode, PrefixV2 } from '@taquito/utils';
 import { ConfigurationError, HttpError } from '@tezos-suite/chain';
-import { Ed25519ClientAuthenticator, buildAuthenticationPayload } from '../../src/chain/client-auth';
+import {
+  Ed25519ClientAuthenticator,
+  buildAuthenticationPayload,
+  encodePublicKeyHash,
+} from '../../src/chain/client-auth';
 import {
   GENERIC_OPERATION_WATERMARK,
   OctezRemoteSigner,
   assertSignerUrlAllowed,
   loadSignerConfig,
+  type SignerRequest,
   type SignerTransport,
 } from '../../src/chain/signer';
-import { tz1 } from '../helpers/addresses';
+import { kt1, tz1, tz4 } from '../helpers/addresses';
 
 const CLIENT_AUTH_KEY = b58Encode(Buffer.alloc(32, 9), PrefixV2.Ed25519Seed);
 
 const validEnv = {
   TAPS_SIGNER_URL: 'https://signer.internal:6732',
   TAPS_SIGNER_PKH: tz1(2),
+  TAPS_SIGNER_CLIENT_AUTH_KEY: CLIENT_AUTH_KEY,
 };
 
 describe('signer configuration', () => {
@@ -24,14 +31,8 @@ describe('signer configuration', () => {
     expect(loadSignerConfig(validEnv)).toEqual({
       url: validEnv.TAPS_SIGNER_URL,
       publicKeyHash: validEnv.TAPS_SIGNER_PKH,
+      clientAuthKey: CLIENT_AUTH_KEY,
     });
-  });
-
-  it('carries the client credential when one is set', () => {
-    expect(
-      loadSignerConfig({ ...validEnv, TAPS_SIGNER_CLIENT_AUTH_KEY: CLIENT_AUTH_KEY })
-        .clientAuthKey,
-    ).toBe(CLIENT_AUTH_KEY);
   });
 
   it.each(Object.keys(validEnv))('refuses to boot without %s', (missing) => {
@@ -120,15 +121,23 @@ describe('octez-signer client', () => {
   const config = loadSignerConfig(validEnv);
   const authenticator = new Ed25519ClientAuthenticator(CLIENT_AUTH_KEY);
 
-  it('sends no authentication parameter when there is no authenticator', async () => {
+  it('authenticates over the key the signature is asked of', async () => {
     const transport = new RecordingTransport({
       status: 200,
       body: JSON.stringify({ signature: 'edsigfake' }),
     });
-    await new OctezRemoteSigner(config, undefined, transport).signOperation('6c00');
-    // The shape a signer without --require-authentication expects, verified
-    // end to end against octez-signer 25.1.
-    expect(transport.calls[0]!.path).toBe(`/keys/${config.publicKeyHash}`);
+    const seen: string[] = [];
+    const spy = {
+      authenticate: async (request: SignerRequest) => {
+        seen.push(request.publicKeyHash);
+        return 'edsigauth';
+      },
+    };
+    await new OctezRemoteSigner(config, spy, transport).signOperation('6c00');
+    expect(seen).toEqual([config.publicKeyHash]);
+    expect(transport.calls[0]!.path).toBe(
+      `/keys/${config.publicKeyHash}?authentication=edsigauth`,
+    );
   });
 
   it('signs with the generic-operation watermark and nothing else', async () => {
@@ -164,18 +173,78 @@ describe('octez-signer client', () => {
 });
 
 describe('client authentication', () => {
-  it('signs the pinned payload layout', async () => {
-    const request = { method: 'POST' as const, path: '/keys/tz1x', dataHex: '0300ff' };
-    const payload = buildAuthenticationPayload(request);
-    expect(payload.subarray(0, 1)).toEqual(Buffer.from([0x04]));
-    expect(payload.subarray(1, 1 + request.path.length).toString()).toBe(request.path);
-    expect(payload.subarray(1 + request.path.length).toString('hex')).toBe('0300ff');
+  /**
+   * Captured from `octez-client` 25.1 talking to a real
+   * `octez-signer --require-authentication` through a logging proxy. Both keys
+   * are throwaway lab keys and hold nothing.
+   *
+   * This is what pins the layout: change any byte of it and this test fails,
+   * so a future change to the payload has to be deliberate.
+   */
+  const VECTOR = {
+    clientSecretKey: 'edsk3W5ouBAVwo65G5fhTTtqAE3fuRx5ifHLiJ2a3HySqkX1YTWAaE',
+    publicKeyHash: 'tz1YpNDoR8oURisTtfFgH7pXjCK8eWHJEamL',
+    dataHex: `03${'aa'.repeat(40)}`,
+    payloadHex:
+      '040100908e18c77adc5aae4ad25e20f8a19ec9fa20ffe8' + `03${'aa'.repeat(40)}`,
+    signature:
+      'edsigtxsHuA6qpJT6FGGHuk5XunrqPkdiQH4MhSumjU1j5x7mzA3Xa4VDpoAW572NSNtYhiWLynyR7ttP7umxRwyvnYMHRf45d7',
+  };
+
+  const request = {
+    method: 'POST' as const,
+    path: `/keys/${VECTOR.publicKeyHash}`,
+    publicKeyHash: VECTOR.publicKeyHash,
+    dataHex: VECTOR.dataHex,
+  };
+
+  it('builds the byte layout octez-signer authenticates over', () => {
+    // 0x04 || tag 0x01 || Public_key_hash.to_bytes || data
+    expect(buildAuthenticationPayload(request).toString('hex')).toBe(VECTOR.payloadHex);
+  });
+
+  it('reproduces a signature octez-client produced', async () => {
+    const auth = new Ed25519ClientAuthenticator(VECTOR.clientSecretKey);
+    await expect(auth.authenticate(request)).resolves.toBe(VECTOR.signature);
+  });
+
+  it('would not reproduce it without the BLAKE2b-256 prehash', async () => {
+    // The trap this issue existed to close: the layout alone is not enough,
+    // and signing it raw fails silently at the signer, not here.
+    const raw = createSign(VECTOR.clientSecretKey, Buffer.from(VECTOR.payloadHex, 'hex'));
+    expect(raw).not.toBe(VECTOR.signature);
+  });
+
+  it('tags the curve of the address, tz4 included', () => {
+    expect(encodePublicKeyHash(tz1(11))[0]).toBe(0x00);
+    expect(encodePublicKeyHash(tz4(11))[0]).toBe(0x03);
+    expect(encodePublicKeyHash(tz1(11))).toHaveLength(21);
+    expect(encodePublicKeyHash(tz4(11))).toHaveLength(21);
+  });
+
+  it('refuses an address it cannot encode, instead of signing something else', () => {
+    expect(() => encodePublicKeyHash(kt1(3))).toThrow(ConfigurationError);
+    expect(() => encodePublicKeyHash('tz1nope')).toThrow(ConfigurationError);
   });
 
   it('produces a base58 signature and refuses a credential that is not a key', async () => {
     const auth = new Ed25519ClientAuthenticator(CLIENT_AUTH_KEY);
-    const signature = await auth.authenticate({ method: 'POST', path: '/keys/x' });
+    const signature = await auth.authenticate(request);
     expect(signature.startsWith('edsig')).toBe(true);
     expect(() => new Ed25519ClientAuthenticator('not-a-key')).toThrow(ConfigurationError);
   });
 });
+
+/** Signs bytes with no prehash — only to show the prehash is load-bearing. */
+function createSign(secretKey: string, payload: Buffer): string {
+  const seed = b58DecodeAndCheckPrefix(secretKey, [PrefixV2.Ed25519Seed], true);
+  const key = createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from('302e020100300506032b657004220420', 'hex'),
+      Buffer.from(seed),
+    ]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+  return b58Encode(nodeSign(null, payload, key), PrefixV2.Ed25519Signature);
+}

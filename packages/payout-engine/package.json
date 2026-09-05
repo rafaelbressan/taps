@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest --config jest.config.js",
+    "test:signer": "jest --config jest.integration.js",
     "check:constants": "node ../tezos-chain/scripts/check-no-protocol-constants.mjs src",
     "check:money": "node scripts/check-no-number-money.mjs src",
     "check:no-local-key": "node scripts/check-no-local-key.mjs src",
@@ -22,7 +23,8 @@
     "@taquito/local-forging": "25.0.0",
     "@taquito/taquito": "^25.0.0",
     "@taquito/utils": "^25.0.0",
-    "@tezos-suite/chain": "file:../tezos-chain"
+    "@tezos-suite/chain": "file:../tezos-chain",
+    "blakejs": "^1.2.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.11",
