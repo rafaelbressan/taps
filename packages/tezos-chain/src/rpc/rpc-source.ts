@@ -1,3 +1,4 @@
+import { boundGlobalFetch } from '../default-fetch';
 import { HttpError } from '../errors';
 import type { NetworkConfig } from '../network';
 
@@ -29,7 +30,7 @@ export class HttpRpcSource implements RpcSource {
     private readonly network: NetworkConfig,
     options: HttpRpcOptions = {},
   ) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? boundGlobalFetch();
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
