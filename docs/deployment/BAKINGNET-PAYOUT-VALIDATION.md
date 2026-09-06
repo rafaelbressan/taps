@@ -221,6 +221,42 @@ Isso está preso por teste em dois níveis:
 
 ---
 
+## Corrida de validação — 06/09/2026, autenticação ligada
+
+Feita, e sem depender de host de ninguém. O harness saca do faucet e cria o próprio
+baker; a única peça que ele não cria é o `octez-signer`, e esse sobe em docker na mesma
+máquina. Ou seja: **a Parte 1 acima é opcional para Bakingnet** — ela descreve o caminho
+com host separado, que é o de mainnet.
+
+| | |
+|---|---|
+| baker | `tz1Yd74M2yxvENLtaskF98bnHp9NXi4apaG9` (8000 XTZ do faucet, 127 membros) |
+| signer | `--require-authentication` + TLS + `--magic-bytes 0x03`, chave do baker importada |
+| operação | `oogYiSyLshA7UJ5HGrBj4DwHqy7wKnvmijS7HU8Nr1ZV96rsNXz` — 125 transferências, `applied` |
+| pago | 342 856 848 mutez, igual ao planejado, conferido na TzKT **e** na RPC |
+| cenários | **10 de 10**, nenhum reprovado |
+
+O signer registrou **um** pedido de assinatura no ciclo inteiro (`magic byte = 03`), e o
+mesmo pedido sem o parâmetro `authentication` volta `missing authentication signature
+field` — a autenticação estava mesmo ligada, não é um flag que passou batido.
+
+Para repetir do zero, ~10 min:
+
+```bash
+cd qa-harness && npm ci
+npm run setup -- --stage accounts --fund 8000     # faucet, ~3 min de prova de trabalho
+
+# importa a chave do baker recém-criada no signer e autoriza a chave de cliente
+BAKER_SK=$(python3 -c "import json;print(json.load(open('state/cohort.json'))['baker']['secretKey'])")
+docker run --rm -v ~/taps-signer/data:/data --entrypoint octez-signer \
+  tezos/tezos:octez-v25.1 -d /data import secret key baker "unencrypted:$BAKER_SK"
+# … 1.2 (chave de cliente), 1.3 (TLS) e 1.4 (subir o daemon) acima …
+
+npm run run -- --engine taps
+```
+
+---
+
 ## Mainnet
 
 Não está neste documento e não está neste épico. Primeira execução que move fundos reais
