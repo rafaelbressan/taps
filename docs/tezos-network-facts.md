@@ -543,6 +543,21 @@ Configurável por baker: um baker pode querer um piso mais alto que a taxa; nunc
 O saldo acumulado é dívida com o delegador — precisa persistir entre ciclos, entrar no cálculo do
 ciclo seguinte, e aparecer no extrato. Acumular e nunca pagar é o mesmo que não pagar.
 
+#### Escolha de K e do limite da fila — Rafael, 2026-09-06 (BRES-83)
+
+Com o corte relativo implementado, sobraram três números de configuração. Dois estão decididos e
+vão preenchidos no `.env.example` do motor:
+
+| variável | valor | por quê |
+|---|---:|---|
+| `TAPS_PAYOUT_MIN_FACTOR` | **2** | quase todo o ganho está no primeiro passo (sem corte → K = 1 economiza 2,68 pp); K = 2 rende mais 0,39 pp por 6 ciclos de espera a mais. De 3 em diante a curva deita e a espera não. |
+| `TAPS_PAYOUT_MAX_OWED_CYCLES` | **3** | ciclo é 24 h hoje, então 3 ciclos devidos é um fim de semana prolongado de queda, que se recupera sozinho. O quarto dia quer um humano. |
+| `TAPS_PAYOUT_CYCLE_CAP_MUTEZ` | **por baker** | 2× o maior ciclo já visto. É fato sobre o pool de cada instalação; copiar o número de outro baker é escolher um teto sem nunca ter visto a carteira que ele protege. Ausente, o processo não sobe — que é a falha certa. |
+
+Nenhum dos três tem padrão no código, e isso não muda: o valor preenchido no `.env.example` é a
+escolha desta instalação, não um default do motor. `loadPayoutFactor`, `loadQueueLimits` e
+`loadPayoutLimits` continuam lançando se a variável faltar.
+
 ### 3.7 Quando a recompensa do ciclo fica pronta
 
 Medido:
