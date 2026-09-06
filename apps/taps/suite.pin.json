@@ -1,0 +1,7 @@
+{
+  "$comment": "O sistema de desenho da suíte mora em suite/ no repositório do Tezzet, porque é de lá que vem a identidade compartilhada. O npm não instala subdiretório de repositório git, e copiar os tokens para cá criaria um segundo dourado. Então: clone raso do commit fixado, montado em vendor/suite (fora do git). Trocar o commit é revisão do Suite Design & Journey.",
+  "repository": "https://github.com/rafaelbressan/tezzet.git",
+  "commit": "5938726068c122fa26f5d8bf70948f6b756ccbe7",
+  "subdirectory": "suite",
+  "marker": "tokens/tokens.css"
+}

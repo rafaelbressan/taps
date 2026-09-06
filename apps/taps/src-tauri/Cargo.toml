@@ -1,0 +1,36 @@
+[package]
+name = "taps"
+version = "0.1.0"
+description = "TAPS — distribuição de recompensas para bakers Tezos. Aplicativo local-first: sem servidor, sem login, sem superfície HTTP pública."
+authors = ["Tezos.Rio"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# O sufixo `_lib` evita colisão com o nome do binário no Windows.
+# Ver https://github.com/rust-lang/cargo/issues/8519
+name = "taps_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# NENHUMA crate de criptografia aqui, e isso é deliberado.
+#
+# A chave que assina o payout vive no host do `octez-signer` e nunca chega a
+# este processo (SPEC-0001 §11). A credencial de cliente fica no cofre de
+# credenciais do sistema operacional, pelo `keyring`; a assinatura de
+# autenticação do pedido é feita pelo `Ed25519ClientAuthenticator` do
+# `@tezos-suite/payout`, que o Tezos Core & Crypto já revisou em BRES-74.
+# Reescrevê-la aqui seria criptografia nova escrita fora daquela revisão.
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["time"] }

@@ -1,4 +1,4 @@
-import { createPrivateKey, sign as cryptoSign } from 'node:crypto';
+import { generateKeyPairFromSeed, sign as ed25519Sign } from '@stablelib/ed25519';
 import { b58DecodeAndCheckPrefix, b58Encode, PrefixV2 } from '@taquito/utils';
 import { ConfigurationError } from '@tezos-suite/chain';
 import { blake2b } from 'blakejs';
@@ -86,11 +86,9 @@ export function buildAuthenticationPayload(request: SignerRequest): Buffer {
   ]);
 }
 
-/** PKCS#8 wrapper for a raw Ed25519 seed, so node:crypto will take it. */
-const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 const ED25519_SEED_BYTES = 32;
 
-function seedFrom(clientAuthKey: string): Buffer {
+function seedFrom(clientAuthKey: string): Uint8Array {
   let decoded: Uint8Array;
   try {
     decoded = b58DecodeAndCheckPrefix(
@@ -114,8 +112,20 @@ function seedFrom(clientAuthKey: string): Buffer {
   return seed;
 }
 
+/**
+ * Ed25519 comes from `@stablelib/ed25519`, not from `node:crypto`.
+ *
+ * The reason is not preference: this class has to run inside the desktop
+ * app's webview, which has no Node at all, and the alternative — a second
+ * implementation of the authentication signature in Rust — would be new
+ * cryptographic code written outside the review that produced this one.
+ *
+ * The swap is proven, not assumed. `test/unit/signer.spec.ts` pins the
+ * signature against a capture from a real `octez-signer` running with
+ * `--require-authentication`, so a byte that changed here fails there.
+ */
 export class Ed25519ClientAuthenticator implements SignerAuthenticator {
-  private readonly key;
+  private readonly secretKey: Uint8Array;
 
   constructor(
     clientAuthKey: string,
@@ -123,11 +133,9 @@ export class Ed25519ClientAuthenticator implements SignerAuthenticator {
       request: SignerRequest,
     ) => Buffer = buildAuthenticationPayload,
   ) {
-    this.key = createPrivateKey({
-      key: Buffer.concat([PKCS8_ED25519_PREFIX, seedFrom(clientAuthKey)]),
-      format: 'der',
-      type: 'pkcs8',
-    });
+    // Ed25519's "secret key" is seed || public key; the seed is the secret and
+    // the rest is derived from it.
+    this.secretKey = generateKeyPairFromSeed(seedFrom(clientAuthKey)).secretKey;
   }
 
   async authenticate(request: SignerRequest): Promise<string> {
@@ -136,7 +144,7 @@ export class Ed25519ClientAuthenticator implements SignerAuthenticator {
     const digest = Buffer.from(
       blake2b(this.buildPayload(request), undefined, TEZOS_DIGEST_BYTES),
     );
-    const signature = cryptoSign(null, digest, this.key);
+    const signature = ed25519Sign(this.secretKey, digest);
     return b58Encode(signature, PrefixV2.Ed25519Signature);
   }
 }

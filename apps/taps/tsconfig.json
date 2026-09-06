@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    // Os pacotes da suíte entram por alias como FONTE, e entram inteiros no
+    // programa do tsc. `buildDelegatorLines` recebe a taxa e hoje não a usa —
+    // é assinatura pública do pacote do estágio 4, com testes e chamadores
+    // próprios, e não é aqui que ela se muda.
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@tezos-suite/chain": ["../../packages/tezos-chain/src/index.ts"],
+      "@tezos-suite/payout": ["../../packages/payout-engine/src/index.ts"],
+      "@tezos-suite/payout-store-sqlite": ["../../packages/payout-store-sqlite/src/index.ts"]
+    },
+    "baseUrl": "."
+  },
+  "include": ["src", "test", "vite.config.ts"]
+}

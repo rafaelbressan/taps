@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "O mínimo que o TAPS precisa: escolher arquivo de backup e de importação por diálogo do sistema, e abrir o explorador de blocos no navegador. Nada de rede, de shell ou de sistema de arquivos aberto — o banco e o signer são atendidos por comandos próprios, que não aceitam caminho nem endereço arbitrário vindo da tela.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "opener:allow-open-url"
+  ]
+}

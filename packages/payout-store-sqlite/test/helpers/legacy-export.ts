@@ -1,0 +1,76 @@
+/**
+ * A slice of a real `SCRIPT TO 'taps-export.sql'` from the old TAPS.
+ *
+ * It is written the way H2 writes it — schema-qualified, identifiers
+ * upper-cased, `DATE '...'` literals, several rows per `INSERT`, `CREATE`
+ * statements interleaved — because a parser tested only against SQL somebody
+ * hand-wrote for the test is a parser that has never seen its input.
+ *
+ * The amounts are the ones that matter: `0.003970` is the value where the old
+ * `Math.floor(tez * 1e6)` returns 3969.
+ */
+export const LEGACY_EXPORT = `;
+CREATE USER IF NOT EXISTS "SA" SALT 'aa' HASH 'bb' ADMIN;
+CREATE CACHED TABLE "PUBLIC"."SETTINGS"(
+    "BAKER_ID" VARCHAR(50) NOT NULL,
+    "DEFAULT_FEE" DECIMAL(6, 2) NOT NULL,
+    "MODE" VARCHAR(20),
+    "PASS_HASH" VARCHAR(150),
+    "PHRASE" VARCHAR(150)
+);
+ALTER TABLE "PUBLIC"."SETTINGS" ADD CONSTRAINT "PUBLIC"."PK_SETTINGS" PRIMARY KEY("BAKER_ID");
+-- 1 +/- SELECT COUNT(*) FROM PUBLIC.SETTINGS
+INSERT INTO "PUBLIC"."SETTINGS"("BAKER_ID", "DEFAULT_FEE", "MODE", "PASS_HASH", "PHRASE") VALUES
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 5.25, 'on', 'a3f5c9', 'U2FsdGVkX1+segredo');
+CREATE CACHED TABLE "PUBLIC"."PAYMENTS"(
+    "BAKER_ID" VARCHAR(50) NOT NULL,
+    "CYCLE" INTEGER NOT NULL,
+    "DATE" DATE,
+    "RESULT" VARCHAR(20) NOT NULL,
+    "TOTAL" DECIMAL(20, 6) NOT NULL,
+    "TRANSACTION_HASH" VARCHAR(70)
+);
+INSERT INTO "PUBLIC"."PAYMENTS"("BAKER_ID", "CYCLE", "DATE", "RESULT", "TOTAL", "TRANSACTION_HASH") VALUES
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 499, DATE '2024-01-15', 'paid', 125.543210, 'onvX8vBGFcJtwvpFHnyMhoZnCVCbSPTUPYPTHmzXHTHqfjqqLhx'),
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 500, DATE '2024-01-18', 'rewards_pending', 0.000000, NULL);
+CREATE CACHED TABLE "PUBLIC"."DELEGATORSPAYMENTS"(
+    "BAKER_ID" VARCHAR(50) NOT NULL,
+    "CYCLE" INTEGER NOT NULL,
+    "ADDRESS" VARCHAR(50) NOT NULL,
+    "DATE" DATE,
+    "RESULT" VARCHAR(20) NOT NULL,
+    "TOTAL" DECIMAL(20, 6) NOT NULL,
+    "TRANSACTION_HASH" VARCHAR(70)
+);
+INSERT INTO "PUBLIC"."DELEGATORSPAYMENTS"("BAKER_ID", "CYCLE", "ADDRESS", "DATE", "RESULT", "TOTAL", "TRANSACTION_HASH") VALUES
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 499, 'tz1RLNfVUUvzCcAkTHsFrEZH1Kg7cCbNNy4M', DATE '2024-01-15', 'applied', 120.000000, 'onvX8vBGFcJtwvpFHnyMhoZnCVCbSPTUPYPTHmzXHTHqfjqqLhx'),
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 499, 'tz1burnburnburnburnburnburnburjAYjjX', DATE '2024-01-15', 'applied', 0.003970, 'onvX8vBGFcJtwvpFHnyMhoZnCVCbSPTUPYPTHmzXHTHqfjqqLhx'),
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 499, 'tz1gjaF81ZRRvdzjobyfVNsAeSC6PScjfQwN', DATE '2024-01-15', 'failed', 5.539240, NULL);
+CREATE CACHED TABLE "PUBLIC"."DELEGATORSFEE"(
+    "BAKER_ID" VARCHAR(50) NOT NULL,
+    "ADDRESS" VARCHAR(50) NOT NULL,
+    "FEE" DECIMAL(6, 2) NOT NULL
+);
+INSERT INTO "PUBLIC"."DELEGATORSFEE"("BAKER_ID", "ADDRESS", "FEE") VALUES
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 'tz1RLNfVUUvzCcAkTHsFrEZH1Kg7cCbNNy4M', 5.25),
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 'tz1gjaF81ZRRvdzjobyfVNsAeSC6PScjfQwN', 0.00);
+CREATE CACHED TABLE "PUBLIC"."BONDPOOL"(
+    "BAKER_ID" VARCHAR(50) NOT NULL,
+    "ADDRESS" VARCHAR(50) NOT NULL,
+    "AMOUNT" DECIMAL(20, 2) NOT NULL,
+    "NAME" VARCHAR(50),
+    "ADM_CHARGE" DECIMAL(20, 2) NOT NULL,
+    "IS_MANAGER" BOOLEAN
+);
+INSERT INTO "PUBLIC"."BONDPOOL"("BAKER_ID", "ADDRESS", "AMOUNT", "NAME", "ADM_CHARGE", "IS_MANAGER") VALUES
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 'tz1RLNfVUUvzCcAkTHsFrEZH1Kg7cCbNNy4M', 5000.00, 'O''Brien', 2.00, TRUE),
+('tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', 'tz1gjaF81ZRRvdzjobyfVNsAeSC6PScjfQwN', 3000.00, NULL, 2.00, FALSE);
+CREATE CACHED TABLE "PUBLIC"."SESSIONLOG"(
+    "ID" INTEGER NOT NULL,
+    "WHEN" TIMESTAMP
+);
+INSERT INTO "PUBLIC"."SESSIONLOG"("ID", "WHEN") VALUES
+(1, TIMESTAMP '2024-01-15 10:11:12');
+`;
+
+export const LEGACY_BAKER = 'tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb';

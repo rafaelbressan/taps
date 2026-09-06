@@ -1,7 +1,7 @@
 {
   "name": "@tezos-suite/payout",
   "version": "0.1.0",
-  "description": "Motor de payout do TAPS: idempotente por desenho, lote dimensionado por gas, m\u00ednimo vindo da estimativa e trilha de auditoria. Assina sempre por signer remoto \u2014 nunca guarda chave.",
+  "description": "Motor de payout do TAPS: idempotente por desenho, lote dimensionado por gas, mínimo vindo da estimativa e trilha de auditoria. Assina sempre por signer remoto — nunca guarda chave.",
   "license": "MIT",
   "private": true,
   "main": "dist/index.js",
@@ -20,6 +20,7 @@
     "verify": "npm run check:constants && npm run check:money && npm run check:no-local-key && npm run typecheck && npm test"
   },
   "dependencies": {
+    "@stablelib/ed25519": "^1.0.3",
     "@taquito/local-forging": "25.0.0",
     "@taquito/taquito": "^25.0.0",
     "@taquito/utils": "^25.0.0",
