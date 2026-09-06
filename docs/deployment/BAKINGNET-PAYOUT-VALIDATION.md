@@ -148,9 +148,20 @@ export TAPS_SIGNER_PKH=tz1...
 export TAPS_SIGNER_CLIENT_AUTH_KEY=edsk...
 export NODE_EXTRA_CA_CERTS=/caminho/para/tls.crt
 
-# Teto por ciclo, em mutez. Sem ele o processo recusa subir.
+# Teto por ciclo, em mutez. Sem ele o processo recusa subir. O pool sintético
+# padrão do harness é 400 000 000, então 500 000 000 cobre a corrida.
 export TAPS_PAYOUT_CYCLE_CAP_MUTEZ=500000000
+
+# K da RN-24: o corte é K x o custo estimado da própria transferência.
+# Escolhido em 2026-09-06 (BRES-83). O harness assume 1 se você não passar,
+# que era o comportamento anterior a K existir — passe 2 para a corrida provar
+# a política que vai valer de verdade.
+export TAPS_PAYOUT_MIN_FACTOR=2
 ```
+
+> A fila de ciclos devidos (`TAPS_PAYOUT_MAX_OWED_CYCLES`, RN-28) não entra aqui:
+> o harness roda um ciclo por vez, escolhido por ele. A variável é obrigatória
+> para quem usa `CycleQueue`, que é o caminho automático de produção.
 
 ```bash
 cd packages/tezos-chain && npm ci && npm run build
