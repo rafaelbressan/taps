@@ -46,3 +46,31 @@ jobs:
       - name: Build
         working-directory: packages/payout-engine
         run: npm run build
+
+  signer-auth:
+    name: Client authentication against a real octez-signer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install the chain layer
+        working-directory: packages/tezos-chain
+        run: npm ci
+
+      - name: Install the payout engine
+        working-directory: packages/payout-engine
+        run: npm ci
+
+      # The unit vector pins the bytes; only the binary can say they are the
+      # RIGHT bytes. This job runs a real `octez-signer --require-authentication`
+      # and proves both directions: the authorized key signs, a stranger's
+      # key is refused.
+      - name: Pull octez
+        run: docker pull tezos/tezos:octez-v25.1
+
+      - name: Sign against octez-signer
+        working-directory: packages/payout-engine
+        run: npm run test:signer
