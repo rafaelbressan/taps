@@ -29,6 +29,7 @@ import {
   createChunkedEstimator,
   loadSignerConfig,
   makeMinimumPayout,
+  payoutFactor,
   type EstimateTransfers,
   type PayoutStore,
 } from '@tezos-suite/payout';
@@ -182,7 +183,7 @@ export class TapsEngine implements PayoutEngine {
       minimumPayout: makeMinimumPayout({
         feeByAddress,
         allocationBurn: this.#d.allocationBurn,
-        bakerFloor: policy.minPayoutFloor,
+        factor: payoutFactor(policy.payoutFactor.num, policy.payoutFactor.den),
       }),
       validateAddresses: false,
     });
@@ -233,7 +234,7 @@ export class TapsEngine implements PayoutEngine {
       policy: {
         fee: feeRate(policy.fee.num, policy.fee.den),
         includeBlockFees: policy.includeBlockFees,
-        bakerFloorMutez: policy.minPayoutFloor,
+        payoutFactor: payoutFactor(policy.payoutFactor.num, policy.payoutFactor.den),
         limits: { cycleCapMutez: this.#d.cycleCapMutez },
       },
     });
@@ -290,7 +291,10 @@ export class TapsEngine implements PayoutEngine {
         policy: {
           fee: feeRate(this.#requireLastPlanned().policy.fee.num, this.#requireLastPlanned().policy.fee.den),
           includeBlockFees: this.#requireLastPlanned().policy.includeBlockFees,
-          bakerFloorMutez: this.#requireLastPlanned().policy.minPayoutFloor,
+          payoutFactor: payoutFactor(
+            this.#requireLastPlanned().policy.payoutFactor.num,
+            this.#requireLastPlanned().policy.payoutFactor.den,
+          ),
           limits: { cycleCapMutez: this.#d.cycleCapMutez },
         },
       });

@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sumMutez } from '@tezos-suite/chain';
+import { payoutFactor } from '../../src/minimum';
 import { FilePayoutStore } from '../../src/store/file';
 import { tz1 } from '../helpers/addresses';
 import { buildHarness } from '../helpers/engine';
@@ -135,5 +136,60 @@ describe('the state survives the process that wrote it', () => {
         batches: [],
       }),
     ).rejects.toThrow(/already has a distribution for cycle/);
+  });
+
+  it('remembers a debt settlement across the process that made it', async () => {
+    const chain = new FakeChain();
+    const TINY = tz1(203);
+    const dusty = makeSplit({
+      baker: BAKER,
+      cycle: CYCLE,
+      ownDelegatedBalance: 0n,
+      delegatedRewards: 10_000_000n,
+      delegators: [delegator(ALICE, 999_000_000_000n), delegator(TINY, 20_000_000n)],
+    });
+
+    const first = buildHarness({
+      split: dusty,
+      chain,
+      feeMutez: 500n,
+      payoutFactor: payoutFactor(1n, 1n),
+      store: new FilePayoutStore(directory),
+    });
+    await first.engine.run(first.request);
+
+    const request = {
+      bakerId: BAKER,
+      settlementId: 'ticket-9',
+      addresses: [TINY],
+      actor: 'rafael',
+      source: 'cli',
+      reason: 'left the baker with an unclearable balance',
+      limits: { cycleCapMutez: 10_000_000_000n },
+    };
+    // The node accepted it and the answer was lost, in the process that died.
+    chain.landThenFailNextInjection = true;
+    await expect(first.engine.settleDebt(request)).rejects.toThrow(/connection reset/);
+
+    // Second process, reading a file it did not write. The debt is still on
+    // record and the hash is there to ask the chain about.
+    const reopened = new FilePayoutStore(directory);
+    const midway = (await reopened.getDebtSettlement(BAKER, 'ticket-9'))!;
+    expect(midway.opHash).not.toBeNull();
+    expect(chain.injected.has(midway.opHash!)).toBe(true);
+    expect((await reopened.loadCarryOver(BAKER)).get(TINY)).toBe(190n);
+
+    const resumed = buildHarness({
+      split: dusty,
+      chain,
+      feeMutez: 500n,
+      payoutFactor: payoutFactor(1n, 1n),
+      store: reopened,
+    });
+    const result = await resumed.engine.settleDebt(request);
+
+    expect(result.status).toBe('settled');
+    expect(result.injected).toEqual([]);
+    expect((await reopened.loadCarryOver(BAKER)).get(TINY)).toBeUndefined();
   });
 });

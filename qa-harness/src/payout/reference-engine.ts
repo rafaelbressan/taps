@@ -123,13 +123,17 @@ export class ReferenceEngine implements PayoutEngine {
   }
 
   /**
-   * Piso efetivo = `max(piso do baker, custo estimado de pagar este delegador)`.
-   * O custo vem da estimativa da própria transferência, não de uma constante:
-   * a taxa flutua com a demanda da rede.
+   * Corte = `K × custo estimado de pagar este delegador`, arredondado para
+   * cima (RN-24). O custo vem da estimativa da própria transferência, não de
+   * uma constante: a taxa flutua com a demanda da rede.
+   *
+   * Calculado aqui de forma independente do motor sob teste — é isso que faz
+   * a reconciliação valer alguma coisa.
    */
   #floorFor(d: { emptied: boolean }, policy: PayoutPolicy): bigint {
     const transferCost = this.sender.estimatedTransferCost(d.emptied);
-    return policy.minPayoutFloor > transferCost ? policy.minPayoutFloor : transferCost;
+    const { num, den } = policy.payoutFactor;
+    return (transferCost * num + den - 1n) / den;
   }
 
   async execute(plan: PayoutPlan): Promise<ExecutionResult> {

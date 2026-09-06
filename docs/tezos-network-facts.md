@@ -484,14 +484,37 @@ de destino não estiver alocada.
 
 Bake Nug, ciclo 1336, pool pagável 28 057 421 mutez para 2919 delegadores, taxa 477:
 
-| corte | delegadores pagos | taxa total | % do pool | acumula p/ próximo ciclo |
-|---:|---:|---:|---:|---:|
-| 0 (sem mínimo) | 2645 | 1 261 665 | 4,50 % | 0 |
-| **477 (= 1 taxa)** | **1069** | **509 913** | **1,82 %** | **136 178** |
-| 4 770 (10 taxas) | 407 | 194 139 | 0,69 % | 1 294 375 |
-| 100 000 (0,1 XTZ) | 46 | 21 942 | 0,08 % | 9 616 921 |
+| K | corte | delegadores pagos | taxa total | % do pool | acumula p/ próximo ciclo | espera do mediano abaixo do corte |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 (sem mínimo) | 0 | 2645 | 1 261 665 | 4,50 % | 0 | — |
+| **1 (= 1 taxa)** | **477** | **1069** | **509 913** | **1,82 %** | **136 178** | **18 ciclos** |
+| 1,5 | 716 | 917 | 437 409 | 1,56 % | 226 203 | 21 ciclos |
+| 2 | 954 | 836 | 398 772 | 1,42 % | 291 183 | 24 ciclos |
+| 3 | 1 431 | 721 | 343 917 | 1,23 % | 429 781 | 29 ciclos |
+| 4 | 1 908 | 639 | 304 803 | 1,09 % | 565 011 | 34 ciclos |
+| 5 | 2 385 | 595 | 283 815 | 1,01 % | 658 080 | 40 ciclos |
+| 10 | 4 770 | 407 | 194 139 | 0,69 % | 1 294 375 | 58 ciclos |
+| corte absoluto 100 000 (0,1 XTZ) | 100 000 | 46 | 21 942 | 0,08 % | 9 616 921 | 547 ciclos |
 
-A última coluna é **só o que é devido a delegador** — a soma dos valores que ficaram abaixo do
+**Como ler a curva.** Quase todo o ganho está no primeiro passo: sair de "sem corte" para K = 1
+economiza 2,68 pontos percentuais do pool. Cada K a mais rende muito menos — de 1 para 2 são 0,39
+pp, de 2 para 3 são 0,19 pp — e cada um custa espera ao delegador pequeno. Um ciclo é
+`blocks_per_cycle × minimal_block_delay`, hoje 24 h na mainnet, então a última coluna se lê em
+dias: K = 2 faz o mediano abaixo do corte esperar 24 dias, K = 10 faz esperar quase dois meses, e
+um corte absoluto de 0,1 XTZ o faz esperar **um ano e meio** — que é a regra virando "some com
+quem é pequeno" (RN-24, borda 2).
+
+A curva acima é deste baker. Ela depende inteiramente de como o saldo delegado está distribuído,
+então não se transporta: para outro baker, meça o dele.
+
+```
+node packages/payout-engine/scripts/measure-cut-curve.mjs <baker> <ciclo> [--fee <mutez>]
+```
+
+O script só lê. A taxa passada em `--fee` deve vir de `estimate.batch()` no dia da decisão, não
+desta página: 477 foi a mediana de um dia, e a taxa se move com a demanda.
+
+A coluna "acumula" é **só o que é devido a delegador** — a soma dos valores que ficaram abaixo do
 corte. A **sobra de arredondamento fica com o baker** (§3.4) e por isso não entra aqui: ela não
 é dívida com ninguém. Sem mínimo, nada acumula, porque os 274 que sobram recebem exatamente 0.
 
