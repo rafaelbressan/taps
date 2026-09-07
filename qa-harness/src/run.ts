@@ -16,13 +16,29 @@ import { Batcher } from './chain/batcher.ts';
 import { reconcile, type Reconciliation } from './chain/reconcile.ts';
 import { ReferenceEngine } from './payout/reference-engine.ts';
 import { TapsEngine } from './payout/taps-engine.ts';
-import { loadPayoutLimits } from '@tezos-suite/payout';
+import { loadPayoutLimits, parsePayoutFactor } from '@tezos-suite/payout';
 import { Sabotage, type MutantName } from './payout/sabotage.ts';
 import { syntheticSplit, tuneDustBalance, tzktSplit } from './payout/split-source.ts';
 import type { PayoutPolicy, RewardSplit } from './payout/types.ts';
 import { buildCohort, generateEd25519, loadCohort, refreshCohort, saveCohort, type Cohort } from './cohort.ts';
 import { OFFLINE_FIXTURE, OfflineSender, type PaymentSender } from './payout/sender.ts';
 import { SCENARIOS, type ScenarioContext, type ScenarioResult } from './scenarios.ts';
+
+/**
+ * K da RN-24 para o harness.
+ *
+ * O motor de produção exige `TAPS_PAYOUT_MIN_FACTOR` — um K que ninguém
+ * escolheu é uma política que ninguém escolheu. Aqui existe um padrão de 1
+ * porque o harness é um cenário, não uma instalação: K = 1 é o corte de
+ * exatamente um custo de transferência, que é o comportamento que os 10
+ * cenários de Bakingnet provaram. Quem quiser medir outra curva passa a
+ * variável.
+ */
+function loadHarnessPayoutFactor(): { num: bigint; den: bigint } {
+  const raw = process.env.TAPS_PAYOUT_MIN_FACTOR?.trim();
+  const factor = parsePayoutFactor(raw && raw !== '' ? raw : '1', 'TAPS_PAYOUT_MIN_FACTOR');
+  return { num: factor.numerator, den: factor.denominator };
+}
 
 export interface RunOptions {
   /** `synthetic:<pool em mutez>` ou `tzkt:<baker>/<cycle>`. */
@@ -254,7 +270,10 @@ export async function run(cfg: HarnessConfig, opts: RunOptions): Promise<RunRepo
   const policy: PayoutPolicy = {
     fee: { num: 10n, den: 100n },
     includeBlockFees: false,
-    minPayoutFloor: 0n, // piso efetivo = taxa estimada da própria transferência
+    // K da RN-24. Escolhido pelo baker; o harness roda em K = 1 por padrão,
+    // que é o corte de um custo de transferência — o mesmo comportamento que
+    // os cenários de Bakingnet provaram antes de K existir.
+    payoutFactor: loadHarnessPayoutFactor(),
     carryOver,
   };
 

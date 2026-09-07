@@ -1,5 +1,6 @@
 import { feeRate, type Mutez, type ProtocolConstants, type RewardSplit } from '@tezos-suite/chain';
 import { PayoutEngine, type EstimateTransfers, type RunRequest } from '../../src/engine';
+import { payoutFactor, type PayoutFactor } from '../../src/minimum';
 import { InMemoryPayoutStore } from '../../src/store/memory';
 import type { PayoutStore } from '../../src/store/types';
 import type { PayoutRpc, HeadRef, TransactionContent } from '../../src/chain/rpc';
@@ -28,8 +29,8 @@ class FakeRpc implements PayoutRpc {
   async getCounter(): Promise<bigint> {
     return 1n;
   }
-  async getBalance(): Promise<Mutez> {
-    return this.chain.balance;
+  async getBalance(address: string): Promise<Mutez> {
+    return this.chain.balanceOf.get(address) ?? this.chain.balance;
   }
   async preapply(_input: {
     protocol: string;
@@ -56,6 +57,9 @@ export interface HarnessOptions {
   readonly headCycle?: number;
   readonly confirmationPolls?: number;
   readonly attemptsPerBatch?: number;
+  /** K of RN-24. Defaults to 1: the cut is exactly one transfer cost. */
+  readonly payoutFactor?: PayoutFactor;
+  readonly balance?: Mutez;
 }
 
 export interface Harness {
@@ -115,7 +119,7 @@ export function buildHarness(options: HarnessOptions): Harness {
       policy: {
         fee: feeRate(5n, 100n),
         includeBlockFees: false,
-        bakerFloorMutez: 0n,
+        payoutFactor: options.payoutFactor ?? payoutFactor(1n, 1n),
         limits: { cycleCapMutez: 10_000_000_000n },
       },
     },

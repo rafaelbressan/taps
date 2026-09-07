@@ -1,6 +1,7 @@
 import { createPrivateKey, sign as cryptoSign } from 'node:crypto';
 import { b58DecodeAndCheckPrefix, b58Encode, PrefixV2 } from '@taquito/utils';
 import { ConfigurationError } from '@tezos-suite/chain';
+import { blake2b } from 'blakejs';
 import type { SignerAuthenticator, SignerRequest } from './signer';
 
 /**
@@ -12,39 +13,76 @@ import type { SignerAuthenticator, SignerRequest } from './signer';
  * holds only this key can move nothing. The payout key never leaves the
  * signer host.
  *
- * STATUS: NOT ACCEPTED BY octez-signer YET. Do not turn on
- * `--require-authentication` expecting this to work.
+ * STATUS: accepted by `octez-signer` 25.1 with `--require-authentication`,
+ * proven against the real binary (see `test/integration/octez-signer-auth.mjs`).
  *
- * Tested on 2026-08-31 against a real `octez-signer` 25.1: every payload this
- * file produces comes back `invalid authentication signature`. The same
- * signer accepts the very same request with authentication off, so the URL,
- * the path, the body and the key derivation are all correct — only these
- * bytes are wrong.
- *
- * The layout Octez checks is, from `src/lib_signer_services/signer_messages.ml`
+ * The layout is the one Octez checks in `src/lib_signer_services/signer_messages.ml`
  * at tag `octez-v25.1`:
  *
  *     to_sign = 0x04 || tag || Signature.Public_key_hash.to_bytes pkh || data
  *
- * with `tag = 1` for a signing request. Reproducing that still fails, so
- * `Public_key_hash.to_bytes` is neither the 20 raw bytes nor the 21 bytes of
- * the tagged union — both were tried, along with the request path and a sweep
- * of leading bytes. What it actually encodes has to be read off a working
- * client before any of this is trusted.
+ * with `tag = 1` for a signing request, and `to_bytes` being the 21 bytes of
+ * the tagged union (`raw_encoding` in `src/lib_crypto/signature_v2.ml`):
+ * one curve byte (tz1 = 0, tz2 = 1, tz3 = 2, tz4 = 3) then the 20-byte hash.
  *
- * Until then the engine talks to a signer WITHOUT `--require-authentication`.
- * The defences that do hold are TLS, `--magic-bytes 0x03`, the destination
- * allowlist and the per-cycle ceiling.
+ * What earlier attempts were missing is not in that layout at all: **a Tezos
+ * signature is never over the message, it is over BLAKE2b-256 of the message.**
+ * `Signature.check` on the signer side hashes `to_sign` before verifying, so
+ * the client has to hash before signing. Sign the layout above raw — as the
+ * spec text alone suggests — and the signer answers `invalid authentication
+ * signature`, with the layout perfectly correct. That is why sweeping tags,
+ * prefixes and pkh encodings never converged.
  */
 
 /** Distinct from 0x03: an authentication signature is not an operation. */
 export const AUTHENTICATION_MAGIC_BYTE = 0x04;
 
+/** `Sign.Request = Make_authenticated_signing_request (tag = 1)`. */
+export const SIGN_REQUEST_TAG = 0x01;
+
+/** BLAKE2b digest size, in bytes, of every Tezos signature payload. */
+const TEZOS_DIGEST_BYTES = 32;
+
+/**
+ * The curve byte `Signature.Public_key_hash.raw_encoding` puts in front of the
+ * 20-byte hash. Same order as the `union` cases in `signature_v2.ml`, and tz4
+ * is in it: a payout address on BLS authenticates like any other.
+ */
+const PKH_CURVE_TAG: ReadonlyMap<PrefixV2, number> = new Map([
+  [PrefixV2.Ed25519PublicKeyHash, 0x00],
+  [PrefixV2.Secp256k1PublicKeyHash, 0x01],
+  [PrefixV2.P256PublicKeyHash, 0x02],
+  [PrefixV2.BLS12_381PublicKeyHash, 0x03],
+]);
+
+const PKH_PREFIXES = [...PKH_CURVE_TAG.keys()] as const;
+
+/** `Signature.Public_key_hash.to_bytes`: curve byte then the 20-byte hash. */
+export function encodePublicKeyHash(publicKeyHash: string): Buffer {
+  let payload: Uint8Array;
+  let prefix: PrefixV2;
+  try {
+    [payload, prefix] = b58DecodeAndCheckPrefix(publicKeyHash, PKH_PREFIXES);
+  } catch (cause) {
+    throw new ConfigurationError(
+      `${JSON.stringify(publicKeyHash)} is not a tz1/tz2/tz3/tz4 address ` +
+        `(${(cause as Error).message})`,
+    );
+  }
+  const tag = PKH_CURVE_TAG.get(prefix);
+  if (tag === undefined) {
+    throw new ConfigurationError(
+      `${publicKeyHash} decodes to ${prefix}, which the signer authentication layout does not cover`,
+    );
+  }
+  return Buffer.concat([Buffer.from([tag]), Buffer.from(payload)]);
+}
+
 export function buildAuthenticationPayload(request: SignerRequest): Buffer {
   return Buffer.concat([
-    Buffer.from([AUTHENTICATION_MAGIC_BYTE]),
-    Buffer.from(request.path, 'utf8'),
-    Buffer.from(request.dataHex ?? '', 'hex'),
+    Buffer.from([AUTHENTICATION_MAGIC_BYTE, SIGN_REQUEST_TAG]),
+    encodePublicKeyHash(request.publicKeyHash),
+    Buffer.from(request.dataHex, 'hex'),
   ]);
 }
 
@@ -93,7 +131,12 @@ export class Ed25519ClientAuthenticator implements SignerAuthenticator {
   }
 
   async authenticate(request: SignerRequest): Promise<string> {
-    const signature = cryptoSign(null, this.buildPayload(request), this.key);
+    // BLAKE2b-256 first. `Signature.check` on the signer hashes `to_sign` the
+    // same way; signing the payload raw fails with the layout still correct.
+    const digest = Buffer.from(
+      blake2b(this.buildPayload(request), undefined, TEZOS_DIGEST_BYTES),
+    );
+    const signature = cryptoSign(null, digest, this.key);
     return b58Encode(signature, PrefixV2.Ed25519Signature);
   }
 }

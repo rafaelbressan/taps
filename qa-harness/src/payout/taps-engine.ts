@@ -29,6 +29,7 @@ import {
   createChunkedEstimator,
   loadSignerConfig,
   makeMinimumPayout,
+  payoutFactor,
   type EstimateTransfers,
   type PayoutStore,
 } from '@tezos-suite/payout';
@@ -120,15 +121,12 @@ export class TapsEngine implements PayoutEngine {
     // Sem endpoint de signer configurado o construtor abaixo lança, e é isso que
     // queremos: não existe modo degradado com chave em disco.
     //
-    // A autenticação de cliente só entra se houver credencial configurada. Hoje
-    // ela NÃO é aceita pelo octez-signer 25.1 (ver `client-auth.ts`), então a
-    // validação em Bakingnet roda sem `--require-authentication`.
+    // A credencial de cliente é obrigatória: o signer roda com
+    // `--require-authentication` e recusa pedido sem assinatura de cliente.
     const signerConfig = loadSignerConfig();
     const signer = new OctezRemoteSigner(
       signerConfig,
-      signerConfig.clientAuthKey
-        ? new Ed25519ClientAuthenticator(signerConfig.clientAuthKey)
-        : undefined,
+      new Ed25519ClientAuthenticator(signerConfig.clientAuthKey),
     );
     const rpc = new HttpPayoutRpc(deps.cfg.rpcUrl, { timeoutMs: deps.cfg.timeoutMs });
     this.#rpc = rpc;
@@ -185,7 +183,7 @@ export class TapsEngine implements PayoutEngine {
       minimumPayout: makeMinimumPayout({
         feeByAddress,
         allocationBurn: this.#d.allocationBurn,
-        bakerFloor: policy.minPayoutFloor,
+        factor: payoutFactor(policy.payoutFactor.num, policy.payoutFactor.den),
       }),
       validateAddresses: false,
     });
@@ -236,7 +234,7 @@ export class TapsEngine implements PayoutEngine {
       policy: {
         fee: feeRate(policy.fee.num, policy.fee.den),
         includeBlockFees: policy.includeBlockFees,
-        bakerFloorMutez: policy.minPayoutFloor,
+        payoutFactor: payoutFactor(policy.payoutFactor.num, policy.payoutFactor.den),
         limits: { cycleCapMutez: this.#d.cycleCapMutez },
       },
     });
@@ -293,7 +291,10 @@ export class TapsEngine implements PayoutEngine {
         policy: {
           fee: feeRate(this.#requireLastPlanned().policy.fee.num, this.#requireLastPlanned().policy.fee.den),
           includeBlockFees: this.#requireLastPlanned().policy.includeBlockFees,
-          bakerFloorMutez: this.#requireLastPlanned().policy.minPayoutFloor,
+          payoutFactor: payoutFactor(
+            this.#requireLastPlanned().policy.payoutFactor.num,
+            this.#requireLastPlanned().policy.payoutFactor.den,
+          ),
           limits: { cycleCapMutez: this.#d.cycleCapMutez },
         },
       });

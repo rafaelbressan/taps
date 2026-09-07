@@ -7,13 +7,14 @@ O harness do BRES-44 já sabe rodar o motor de produção (`--engine taps`), e o
 recusa subir sem signer. Falta a metade que só quem tem o host pode fazer: **subir o
 `octez-signer` e financiar a chave**.
 
-> **Os três valores não existem em lugar nenhum ainda. Você os cria.** Não há onde
+> **Os valores não existem em lugar nenhum ainda. Você os cria.** Não há onde
 > procurá-los: `TAPS_SIGNER_URL` é o endereço que você escolhe para o daemon,
-> `TAPS_SIGNER_PKH` é o endereço de uma chave que você gera, e o `octez-signer` é um
-> binário que você sobe. Os comandos abaixo produzem os três.
+> `TAPS_SIGNER_PKH` é o endereço de uma chave que você gera,
+> `TAPS_SIGNER_CLIENT_AUTH_KEY` é a chave de cliente que você gera, e o `octez-signer`
+> é um binário que você sobe. Os comandos abaixo produzem todos.
 
-**Tudo aqui foi executado de verdade contra `octez-signer` 25.1 em 31/08**, e a primeira
-versão deste documento estava errada — ver "O que mudou" no fim.
+**Tudo aqui foi executado de verdade contra `octez-signer` 25.1**, e as versões
+anteriores deste documento estavam erradas em dois pontos — ver "O que mudou" no fim.
 
 ---
 
@@ -48,7 +49,31 @@ Public Key: edpku9114QhK...
 Financie esse `tz1...` no faucet: <https://faucet.bakingnet.teztnets.com>. Uns 8 000 ꜩ
 cobrem o cenário com folga.
 
-### 1.2 O certificado TLS — vira o `TAPS_SIGNER_URL`
+### 1.2 A chave de cliente — vira o `TAPS_SIGNER_CLIENT_AUTH_KEY`
+
+O signer roda com `--require-authentication`: ele só atende quem assina o pedido com uma
+chave que ele conhece. Essa chave **não move dinheiro** — ela só diz *quem está pedindo*.
+
+```bash
+docker run --rm -v ~/taps-signer/client:/data --entrypoint octez-signer \
+  tezos/tezos:latest -d /data gen keys client
+
+cat ~/taps-signer/client/public_keys   # o edpk... — vai para o signer
+cat ~/taps-signer/client/secret_keys   # o edsk... — vai para o host do TAPS
+```
+
+Autorize a pública no signer:
+
+```bash
+docker run --rm -v ~/taps-signer/data:/data --entrypoint octez-signer \
+  tezos/tezos:latest -d /data add authorized key <edpk-do-cliente>
+```
+
+O `edsk` do cliente (sem o prefixo `unencrypted:`) vira o `TAPS_SIGNER_CLIENT_AUTH_KEY`
+no host do TAPS. **A chave de payout continua sem sair do host do signer** — são chaves
+diferentes, e é essa separação que a opção A protege.
+
+### 1.3 O certificado TLS — vira o `TAPS_SIGNER_URL`
 
 O signer serve esta API **só por TCP**, e HTTP em claro é proibido pela decisão de
 custódia. Então TLS, com certificado próprio:
@@ -64,7 +89,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
 Se o signer for rodar em outra máquina, troque o `subjectAltName` pelo IP ou nome que a
 máquina do harness vai usar (o IP da Tailscale, por exemplo).
 
-### 1.3 Subir o daemon
+### 1.4 Subir o daemon
 
 ```bash
 docker run -d --name taps-signer -p 6732:6732 \
@@ -72,13 +97,15 @@ docker run -d --name taps-signer -p 6732:6732 \
   -v ~/taps-signer/tls.crt:/tls.crt:ro \
   -v ~/taps-signer/tls.key:/tls.key:ro \
   --entrypoint octez-signer tezos/tezos:latest \
-  -d /data launch https signer /tls.crt /tls.key \
+  -d /data --require-authentication launch https signer /tls.crt /tls.key \
   --address 0.0.0.0 --port 6732 --magic-bytes 0x03
 
 docker logs taps-signer     # deve dizer "accepting HTTPS requests on port 6732"
 ```
 
-`--magic-bytes 0x03` é o que faz o signer recusar cabeçalho de bloco e attestation: com
+`--require-authentication` é o que faz o signer recusar qualquer processo que não seja o
+TAPS, mesmo com acesso à porta. `--magic-bytes 0x03` é o que faz o signer recusar
+cabeçalho de bloco e attestation: com
 ele, um host comprometido do TAPS não arranca do signer nada além de uma operação
 genérica — e o destino dessa operação é conferido do lado do TAPS, contra a lista de
 delegadores calculada localmente, antes de a assinatura ser pedida.
@@ -92,18 +119,20 @@ O que **não** pode entrar na linha de comando:
 | `--allow-to-prove-possession` | não é necessário para payout |
 | `launch http signer` | corpo em claro; o corpo são os bytes que movem dinheiro |
 
-### 1.4 O que me mandar
+### 1.5 O que me mandar
 
 ```
 TAPS_SIGNER_URL=https://<host-ou-ip>:6732
 TAPS_SIGNER_PKH=tz1...            (o do passo 1.1, já financiado)
+TAPS_SIGNER_CLIENT_AUTH_KEY=edsk...   (o secret do passo 1.2 — o do CLIENTE)
 ```
 
 Mais o **conteúdo do `tls.crt`** (é público — é o certificado, não a chave). Sem ele o
 Node recusa o certificado próprio.
 
 **A chave de payout (o `edsk` do baker) não vem no comentário.** Se vier, a opção A
-deixou de valer e a chave precisa ser rotacionada.
+deixou de valer e a chave precisa ser rotacionada. O `edsk` do **cliente** vem — ele não
+assina transferência nenhuma, só prova quem está pedindo.
 
 ---
 
@@ -116,11 +145,23 @@ export TZKT_API_URL=https://api.bakingnet.tzkt.io
 
 export TAPS_SIGNER_URL=https://<host>:6732
 export TAPS_SIGNER_PKH=tz1...
+export TAPS_SIGNER_CLIENT_AUTH_KEY=edsk...
 export NODE_EXTRA_CA_CERTS=/caminho/para/tls.crt
 
-# Teto por ciclo, em mutez. Sem ele o processo recusa subir.
+# Teto por ciclo, em mutez. Sem ele o processo recusa subir. O pool sintético
+# padrão do harness é 400 000 000, então 500 000 000 cobre a corrida.
 export TAPS_PAYOUT_CYCLE_CAP_MUTEZ=500000000
+
+# K da RN-24: o corte é K x o custo estimado da própria transferência.
+# Escolhido em 2026-09-06 (BRES-83). O harness assume 1 se você não passar,
+# que era o comportamento anterior a K existir — passe 2 para a corrida provar
+# a política que vai valer de verdade.
+export TAPS_PAYOUT_MIN_FACTOR=2
 ```
+
+> A fila de ciclos devidos (`TAPS_PAYOUT_MAX_OWED_CYCLES`, RN-28) não entra aqui:
+> o harness roda um ciclo por vez, escolhido por ele. A variável é obrigatória
+> para quem usa `CycleQueue`, que é o caminho automático de produção.
 
 ```bash
 cd packages/tezos-chain && npm ci && npm run build
@@ -160,33 +201,74 @@ socket unix. **Isso não funciona, e eu só descobri porque subi o signer de ver
 O `unix://` foi removido do cliente: aceitar o esquema só faria a instalação falhar na
 primeira assinatura em vez de falhar ao subir.
 
-### Autenticação de cliente: pendente
+### Autenticação de cliente: fechada
 
-A decisão de custódia pede `--require-authentication`. **O cliente ainda não passa nessa
-checagem** — testado contra o signer real, toda variante volta
-`invalid authentication signature`, enquanto o mesmo pedido sem autenticação é aceito.
-Ou seja: URL, caminho, corpo e derivação de chave estão certos; só os bytes assinados
-estão errados.
-
-O layout que o Octez confere está em `src/lib_signer_services/signer_messages.ml`
-(`octez-v25.1`):
+`--require-authentication` está **ligado** e o cliente passa. O que faltava não era o
+layout de bytes — era o passo antes dele:
 
 ```
-to_sign = 0x04 || tag || Signature.Public_key_hash.to_bytes pkh || data     (tag = 1)
+to_sign = 0x04 || 0x01 || Public_key_hash.to_bytes pkh || data
+assinatura = Ed25519(BLAKE2b-256(to_sign))
 ```
 
-Reproduzir isso ainda reprova, então `Public_key_hash.to_bytes` não é nem os 20 bytes
-crus nem os 21 da união com tag — os dois foram tentados.
+**Assinatura Tezos nunca é sobre a mensagem: é sobre o BLAKE2b-256 dela.** O
+`Signature.check` do signer hasheia `to_sign` antes de conferir, então o cliente tem que
+hashear antes de assinar. Assinar o layout cru — que é o que o texto do
+`signer_messages.ml` sugere sozinho — reprova com o layout perfeitamente correto. Foi
+por isso que varrer tag, prefixo e formato do `pkh` nunca convergiu.
 
-**Consequência prática:** a validação em Bakingnet roda **sem**
-`--require-authentication`. O que continua valendo é TLS, `--magic-bytes 0x03`, a
-conferência de destino contra a lista de delegadores e o teto por ciclo. Fechar a
-autenticação é item próprio, e é **pré-requisito de mainnet**, não de Bakingnet.
+`Public_key_hash.to_bytes` é a união com tag de curva: 1 byte (tz1 = 0, tz2 = 1,
+tz3 = 2, tz4 = 3) e os 20 bytes do hash.
+
+Isso está preso por teste em dois níveis:
+
+- `test/unit/signer.spec.ts` fixa os bytes contra um vetor capturado de um
+  `octez-client` 25.1 real — mudar qualquer byte reprova;
+- `npm run test:signer` sobe um `octez-signer --require-authentication` de verdade em
+  docker e prova as duas direções: a chave autorizada é aceita, uma chave estranha volta
+  `invalid authentication signature`.
+
+`TAPS_SIGNER_CLIENT_AUTH_KEY` é obrigatório: sem ele o processo não sobe.
+
+---
+
+## Corrida de validação — 06/09/2026, autenticação ligada
+
+Feita, e sem depender de host de ninguém. O harness saca do faucet e cria o próprio
+baker; a única peça que ele não cria é o `octez-signer`, e esse sobe em docker na mesma
+máquina. Ou seja: **a Parte 1 acima é opcional para Bakingnet** — ela descreve o caminho
+com host separado, que é o de mainnet.
+
+| | |
+|---|---|
+| baker | `tz1Yd74M2yxvENLtaskF98bnHp9NXi4apaG9` (8000 XTZ do faucet, 127 membros) |
+| signer | `--require-authentication` + TLS + `--magic-bytes 0x03`, chave do baker importada |
+| operação | `oogYiSyLshA7UJ5HGrBj4DwHqy7wKnvmijS7HU8Nr1ZV96rsNXz` — 125 transferências, `applied` |
+| pago | 342 856 848 mutez, igual ao planejado, conferido na TzKT **e** na RPC |
+| cenários | **10 de 10**, nenhum reprovado |
+
+O signer registrou **um** pedido de assinatura no ciclo inteiro (`magic byte = 03`), e o
+mesmo pedido sem o parâmetro `authentication` volta `missing authentication signature
+field` — a autenticação estava mesmo ligada, não é um flag que passou batido.
+
+Para repetir do zero, ~10 min:
+
+```bash
+cd qa-harness && npm ci
+npm run setup -- --stage accounts --fund 8000     # faucet, ~3 min de prova de trabalho
+
+# importa a chave do baker recém-criada no signer e autoriza a chave de cliente
+BAKER_SK=$(python3 -c "import json;print(json.load(open('state/cohort.json'))['baker']['secretKey'])")
+docker run --rm -v ~/taps-signer/data:/data --entrypoint octez-signer \
+  tezos/tezos:octez-v25.1 -d /data import secret key baker "unencrypted:$BAKER_SK"
+# … 1.2 (chave de cliente), 1.3 (TLS) e 1.4 (subir o daemon) acima …
+
+npm run run -- --engine taps
+```
 
 ---
 
 ## Mainnet
 
 Não está neste documento e não está neste épico. Primeira execução que move fundos reais
-é decisão do Rafael, em issue separada, com ele presente — e depois da autenticação
-resolvida.
+é decisão do Rafael, em issue separada, com ele presente.

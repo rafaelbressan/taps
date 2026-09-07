@@ -1,7 +1,11 @@
 import { InvariantViolationError } from '@tezos-suite/chain';
-import { DuplicateDistributionError, DuplicateOperationError } from '../../src/errors';
+import {
+  DuplicateDistributionError,
+  DuplicateOperationError,
+  DuplicateSettlementError,
+} from '../../src/errors';
 import { InMemoryPayoutStore } from '../../src/store/memory';
-import type { NewDistribution } from '../../src/store/types';
+import type { NewDebtSettlement, NewDistribution } from '../../src/store/types';
 import { operationHash, tz1 } from '../helpers/addresses';
 
 const BAKER = tz1(1);
@@ -23,6 +27,8 @@ function newDistribution(cycle = 1336): NewDistribution {
       totalToSend: 855_000n,
       feeNumerator: 5n,
       feeDenominator: 100n,
+      payoutFactorNumerator: 1n,
+      payoutFactorDenominator: 1n,
       blockFeesIncluded: false,
       delegatorCount: 2,
     },
@@ -36,6 +42,7 @@ function newDistribution(cycle = 1336): NewDistribution {
       netMutez: 427_500n,
       carriedInMutez: 0n,
       payableMutez: 427_500n,
+      transferCostMutez: 500n,
       minimumMutez: 500n,
       withheldMutez: 0n,
       amountMutez: 427_500n,
@@ -166,5 +173,155 @@ describe('the store is what makes a duplicate payment impossible', () => {
       at: new Date(),
     });
     expect(await store.loadCarryOver(BAKER)).toEqual(new Map([[BOB, 123n]]));
+  });
+
+  it('reports the status of every cycle it holds, without materialising them', async () => {
+    const store = new InMemoryPayoutStore();
+    await store.createDistribution(newDistribution(1336));
+    await store.createDistribution(newDistribution(1337));
+    await store.setDistributionStatus(BAKER, 1336, 'settled', new Date());
+
+    // What the queue reads to know what is still owed. A cycle that is not
+    // here was never planned, which for a distributable cycle means owed.
+    expect(await store.listCycleStatuses(BAKER)).toEqual(
+      new Map([
+        [1336, 'settled'],
+        [1337, 'planned'],
+      ]),
+    );
+    expect(await store.listCycleStatuses(tz1(99))).toEqual(new Map());
+  });
+});
+
+describe('the debt settlement contract', () => {
+  function newSettlement(settlementId = 'ticket-1'): NewDebtSettlement {
+    return {
+      bakerId: BAKER,
+      settlementId,
+      network: 'testnet',
+      protocolHash: 'PsTest',
+      actor: 'rafael',
+      reason: 'stopped delegating',
+      lines: [
+        {
+          address: ALICE,
+          amountMutez: 190n,
+          feeMutez: 500n,
+          gasLimit: 2169n,
+          storageLimit: 0n,
+          burnMutez: 0n,
+        },
+      ],
+      totalAmount: 190n,
+      totalFees: 500n,
+      totalBurn: 0n,
+    };
+  }
+
+  async function storeWithDebt(): Promise<InMemoryPayoutStore> {
+    const store = new InMemoryPayoutStore();
+    await store.createDistribution(newDistribution());
+    await store.settleDistribution({
+      bakerId: BAKER,
+      cycle: 1336,
+      status: 'settled',
+      lines: [
+        { address: ALICE, result: 'deferred', batchIndex: null, opHash: null },
+        { address: BOB, result: 'deferred', batchIndex: null, opHash: null },
+      ],
+      carryOver: new Map([[ALICE, 190n]]),
+      at: new Date(),
+    });
+    return store;
+  }
+
+  it('refuses a second settlement under the same name', async () => {
+    const store = await storeWithDebt();
+    await store.createDebtSettlement(newSettlement());
+    await expect(store.createDebtSettlement(newSettlement())).rejects.toBeInstanceOf(
+      DuplicateSettlementError,
+    );
+  });
+
+  it('refuses the same operation hash under two owners', async () => {
+    const store = await storeWithDebt();
+    await store.createDebtSettlement(newSettlement('a'));
+    await store.createDebtSettlement(newSettlement('b'));
+    const intent = {
+      bakerId: BAKER,
+      opHash: operationHash(7),
+      counter: '1',
+      branch: 'BL',
+      branchLevel: 10,
+      at: new Date(),
+    };
+    await store.recordSettlementIntent({ ...intent, settlementId: 'a' });
+    await expect(
+      store.recordSettlementIntent({ ...intent, settlementId: 'b' }),
+    ).rejects.toBeInstanceOf(DuplicateOperationError);
+  });
+
+  it('will not record a second attempt while the first can still land', async () => {
+    const store = await storeWithDebt();
+    await store.createDebtSettlement(newSettlement());
+    const base = {
+      bakerId: BAKER,
+      settlementId: 'ticket-1',
+      counter: '1',
+      branch: 'BL',
+      branchLevel: 10,
+      at: new Date(),
+    };
+    await store.recordSettlementIntent({ ...base, opHash: operationHash(1) });
+    await expect(
+      store.recordSettlementIntent({ ...base, opHash: operationHash(2) }),
+    ).rejects.toBeInstanceOf(InvariantViolationError);
+  });
+
+  it('clears the debt only on a settled settlement', async () => {
+    const store = await storeWithDebt();
+    await store.createDebtSettlement(newSettlement());
+
+    // The check that can fail: a cleared debt with nothing confirmed is a
+    // debt silently forgiven.
+    await expect(
+      store.recordSettlementStatus({
+        bakerId: BAKER,
+        settlementId: 'ticket-1',
+        status: 'failed',
+        cleared: [ALICE],
+        at: new Date(),
+      }),
+    ).rejects.toBeInstanceOf(InvariantViolationError);
+    expect(await store.loadCarryOver(BAKER)).toEqual(new Map([[ALICE, 190n]]));
+
+    await store.recordSettlementStatus({
+      bakerId: BAKER,
+      settlementId: 'ticket-1',
+      status: 'settled',
+      cleared: [ALICE],
+      at: new Date(),
+    });
+    expect(await store.loadCarryOver(BAKER)).toEqual(new Map());
+  });
+
+  it('refuses to clear a debt for an amount other than the one on record', async () => {
+    const store = await storeWithDebt();
+    await store.createDebtSettlement({
+      ...newSettlement(),
+      lines: [{ ...newSettlement().lines[0]!, amountMutez: 100n }],
+      totalAmount: 100n,
+    });
+    await expect(
+      store.recordSettlementStatus({
+        bakerId: BAKER,
+        settlementId: 'ticket-1',
+        status: 'settled',
+        cleared: [ALICE],
+        at: new Date(),
+      }),
+    ).rejects.toBeInstanceOf(InvariantViolationError);
+    // Paying 100 against a debt of 190 leaves 190 owed, not 0 and not 90.
+    expect(await store.loadCarryOver(BAKER)).toEqual(new Map([[ALICE, 190n]]));
   });
 });

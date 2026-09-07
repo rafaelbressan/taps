@@ -8,6 +8,7 @@ import {
 import {
   CycleCapExceededError,
   DestinationNotAllowedError,
+  SettlementCapExceededError,
   StorageAllocationError,
 } from './errors';
 
@@ -30,7 +31,7 @@ export function assertDestinationsAllowed(
   transfers: readonly { readonly address: string }[],
   allowed: ReadonlySet<string>,
   bakerId: string,
-  cycle: number,
+  cycle: number | null,
 ): void {
   for (const transfer of transfers) {
     if (!allowed.has(transfer.address)) {
@@ -108,5 +109,23 @@ export function loadPayoutLimits(env: NodeJS.ProcessEnv = process.env): PayoutLi
 export function assertCycleCap(total: Mutez, limits: PayoutLimits, cycle: number): void {
   if (total > limits.cycleCapMutez) {
     throw new CycleCapExceededError(total, limits.cycleCapMutez, cycle);
+  }
+}
+
+/**
+ * The same ceiling, applied to an out-of-cycle debt settlement.
+ *
+ * A settlement is a human decision, and a human decision is exactly when a
+ * wrong number gets typed. The cap the baker configured for a cycle is the
+ * best available statement of "more than this is not routine", so it guards
+ * this path too.
+ */
+export function assertSettlementCap(
+  total: Mutez,
+  limits: PayoutLimits,
+  settlementId: string,
+): void {
+  if (total > limits.cycleCapMutez) {
+    throw new SettlementCapExceededError(total, limits.cycleCapMutez, settlementId);
   }
 }

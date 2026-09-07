@@ -19,6 +19,12 @@ import { blockHash } from './addresses';
 export class FakeChain {
   headLevel = 1_000;
   balance: Mutez = 1_000_000_000_000n;
+  /**
+   * Balance per address, for the addresses a test cares about. An implicit
+   * account at zero is not allocated, which is how the settlement path tells
+   * that paying it will burn storage.
+   */
+  readonly balanceOf = new Map<string, Mutez>();
   /** Hashes the chain has actually seen. */
   readonly injected = new Map<string, { level: number; status: string }>();
   /** Every hash a caller prepared, injected or not. */
