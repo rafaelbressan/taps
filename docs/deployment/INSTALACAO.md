@@ -75,6 +75,18 @@ sudo apt install ./TAPS_0.1.0_amd64.deb
 O `apt` resolve sozinho as duas dependências (`libwebkit2gtk-4.1-0` e
 `libgtk-3-0`). Para remover depois: `sudo apt remove taps`.
 
+No fim ele costuma imprimir um aviso assim:
+
+```
+N: Download is performed unsandboxed as root as file '/home/você/Downloads/…'
+   couldn't be accessed by user '_apt'. - pkgAcquire::Run (13: Permission denied)
+```
+
+**Isso não é erro e a instalação deu certo.** O `apt` tenta ler o arquivo como
+o usuário `_apt`, que não entra na sua pasta pessoal porque ela é sua e de mais
+ninguém; então ele lê como root e avisa. Se aparecer, confira com
+`dpkg -l taps` — uma linha começando por `ii` quer dizer instalado.
+
 Precisa de Debian 12 ou Ubuntu 22.04 para cima — versões mais antigas trazem o
 webkit 4.0 e o pacote não instala.
 
