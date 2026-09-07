@@ -95,7 +95,7 @@ um produto que decidiu não guardar chave nenhuma.
 
 ```bash
 npm ci
-npm run verify   # sem number no caminho do dinheiro + tipos + 75 testes
+npm run verify   # sem number no caminho do dinheiro + tipos + 94 testes
 ```
 
 `node:sqlite` exige Node 22.
