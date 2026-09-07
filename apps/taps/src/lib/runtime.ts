@@ -82,6 +82,64 @@ class TauriSignerAuthenticator implements SignerAuthenticator {
   }
 }
 
+/**
+ * O provedor de assinatura do Taquito, para a ESTIMATIVA e só para ela.
+ *
+ * Sem isto o `tezos.estimate.batch()` levanta "No signer has been configured"
+ * e o pagamento morre antes de existir — o `TezosToolkit` era criado sem
+ * provedor nenhum, e nada em lugar nenhum chamava `setProvider`. Foi o
+ * segundo muro atrás do TLS da BRES-137, e ele também nunca deixou pagar.
+ *
+ * O que este objeto entrega, e o que ele recusa, é a fronteira inteira:
+ *
+ * - **`publicKeyHash`** vem da configuração. É endereço, é público.
+ * - **`publicKey`** é lida do próprio signer, pelo canal fixado do Rust. O
+ *   Taquito precisa dela para saber se a conta já foi revelada.
+ * - **`sign` e `secretKey` recusam.** Estimar não assina: o Taquito usa uma
+ *   assinatura de mentira para medir gás, e quem assina de verdade é o
+ *   `OctezRemoteSigner` no injetor, depois de o motor decidir o lote. Se um
+ *   dia o Taquito chamar `sign` daqui, é melhor levantar do que assinar um
+ *   payload que ninguém do TAPS montou.
+ */
+class EstimationOnlySigner {
+  constructor(
+    private readonly publicKeyHashValue: string,
+    private readonly transport: SignerTransport,
+  ) {}
+
+  async publicKeyHash(): Promise<string> {
+    return this.publicKeyHashValue;
+  }
+
+  async publicKey(): Promise<string> {
+    const response = await this.transport.send('GET', `/keys/${this.publicKeyHashValue}`);
+    if (response.status !== 200) {
+      throw new Error(
+        `o signer respondeu ${response.status} ao pedido da chave pública de ` +
+          `${this.publicKeyHashValue} — sem ela o Taquito não sabe estimar`,
+      );
+    }
+    const parsed = JSON.parse(response.body) as { public_key?: unknown };
+    if (typeof parsed.public_key !== 'string' || parsed.public_key === '') {
+      throw new Error(
+        `o signer respondeu sem o campo "public_key": ${response.body.slice(0, 200)}`,
+      );
+    }
+    return parsed.public_key;
+  }
+
+  async sign(): Promise<never> {
+    throw new Error(
+      'a estimativa não assina. O Taquito mede gás com uma assinatura de mentira, e a ' +
+        'assinatura de verdade sai pelo OctezRemoteSigner depois que o motor fecha o lote',
+    );
+  }
+
+  async secretKey(): Promise<never> {
+    throw new Error('a chave de pagamento vive no host do octez-signer e não chega aqui');
+  }
+}
+
 export interface Runtime {
   readonly db: TauriSqlDatabase;
   readonly store: SqlitePayoutStore;
@@ -176,6 +234,11 @@ export async function buildRuntime(
     // próprio quebraria na primeira estimativa.
     const toolkit = new TezosToolkit(
       new RpcClient(settings.rpcUrl, 'main', new TauriHttpBackend()),
+    );
+    // Estimar precisa saber de quem sai o dinheiro. Sem provedor, o
+    // `estimate.batch()` levanta antes de perguntar qualquer coisa ao nó.
+    toolkit.setSignerProvider(
+      new EstimationOnlySigner(settings.signerPublicKeyHash, new TauriSignerTransport()),
     );
     const chainConstants = await constants();
     const balance = await rpc.getBalance(settings.signerPublicKeyHash);
