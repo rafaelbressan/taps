@@ -75,6 +75,22 @@ jobs:
           # mora. Sem ele o build passa e o aplicativo não abre.
           sudo apt-get install -y libdbus-1-dev pkg-config
 
+      # Os três pacotes da suíte entram no bundle como FONTE, por alias do
+      # Vite — e o `tsc` do app typecheca essa fonte junto. Ela importa
+      # `@taquito/*`, `blakejs` e `@stablelib/ed25519`, que moram no
+      # `node_modules` de cada pacote. Sem estes três `npm ci` o typecheck do
+      # app quebra com "Cannot find module", e o erro aponta para um arquivo
+      # que não é dele.
+      - name: Install the chain layer
+        working-directory: packages/tezos-chain
+        run: npm ci
+      - name: Install the payout engine
+        working-directory: packages/payout-engine
+        run: npm ci
+      - name: Install the store
+        working-directory: packages/payout-store-sqlite
+        run: npm ci
+
       - name: Install
         working-directory: apps/taps
         run: npm ci
