@@ -118,7 +118,14 @@ const FIELDS: readonly Field[] = [
 export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // O erro carrega o próprio título. Antes havia um só, fixo em "Não consegui
+  // salvar", e a recusa de um arquivo de credencial saía sob ele — dizendo que
+  // falhou ao salvar o que nunca esteve sendo salvo.
+  const [error, setError] = useState<{
+    what: string;
+    where: string;
+    detail: string;
+  } | null>(null);
   const [saved, setSaved] = useState(false);
   const [credentialPresent, setCredentialPresent] = useState(
     ready.status.signer_credential_present,
@@ -131,7 +138,13 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
     (async () => {
       const raw = await readRawSettings(ready.db);
       setValues(Object.fromEntries(raw));
-    })().catch((caught) => setError(describe(caught)));
+    })().catch((caught) =>
+      setError({
+        what: 'Não consegui ler a configuração',
+        where: 'configuração',
+        detail: describe(caught),
+      }),
+    );
   }, [ready]);
 
   async function save() {
@@ -143,7 +156,11 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setSaved(true);
       onSaved();
     } catch (caught) {
-      setError(describe(caught));
+      setError({
+        what: 'Não consegui salvar',
+        where: 'configuração',
+        detail: describe(caught),
+      });
     } finally {
       setSaving(false);
     }
@@ -176,7 +193,11 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setCredentialPublicKey(imported.public_key);
       onSaved();
     } catch (caught) {
-      setError(describe(caught));
+      setError({
+        what: 'Não importei a credencial',
+        where: 'credencial do signer',
+        detail: describe(caught),
+      });
     }
   }
 
@@ -188,7 +209,11 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setCredentialPublicKey(null);
       onSaved();
     } catch (caught) {
-      setError(describe(caught));
+      setError({
+        what: 'Não consegui esquecer a credencial',
+        where: 'credencial do signer',
+        detail: describe(caught),
+      });
     }
   }
 
@@ -201,7 +226,7 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       </p>
 
       {error && (
-        <Fault what="Não consegui salvar" where="configuração" cost={error} />
+        <Fault what={error.what} where={error.where} cost={error.detail} />
       )}
       {saved && <p className="note">Configuração salva.</p>}
 

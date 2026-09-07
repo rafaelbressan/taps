@@ -214,7 +214,11 @@ export function Home(props: {
           <div className="pair">
             <span className="pair__key">Credencial do signer</span>
             <span className="pair__value">
-              {ready.status.signer_credential_present ? 'no cofre do sistema' : 'ausente'}
+              {ready.status.signer_credential_present
+                ? 'no cofre do sistema'
+                : ready.status.signer_vault_error
+                  ? 'cofre não respondeu'
+                  : 'ausente'}
             </span>
           </div>
           <p className="note" style={{ marginTop: 'var(--s-3)' }}>

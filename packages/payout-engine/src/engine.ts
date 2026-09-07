@@ -1040,6 +1040,7 @@ export class PayoutEngine {
       action,
       outcome,
       params,
+      ...auditColumns(params),
     });
   }
 
@@ -1122,4 +1123,45 @@ function batchHashes(batches: readonly BatchRecord[]): string[] {
   return batches
     .map((batch) => batch.opHash)
     .filter((hash): hash is string => hash !== null);
+}
+
+/**
+ * O valor, os destinos e o motivo saem dos próprios `params`.
+ *
+ * As colunas existem na tabela desde sempre e ninguém as preenchia: a Trilha
+ * mostrava "—" em VALOR e OPERAÇÃO mesmo numa linha que carregava o total
+ * assinado, e o motivo de um erro só existia dentro do JSON. Ler daqui evita
+ * repetir o valor em cada uma das dezenas de chamadas de auditoria.
+ */
+export function auditColumns(params: Readonly<Record<string, unknown>>): {
+  amountMutez?: Mutez;
+  destinations?: readonly string[];
+  opHash?: string;
+  detail?: string;
+} {
+  const columns: {
+    amountMutez?: Mutez;
+    destinations?: readonly string[];
+    opHash?: string;
+    detail?: string;
+  } = {};
+
+  const amount = params.totalAmountMutez ?? params.totalToSend ?? params.amountMutez;
+  if (typeof amount === 'string' && /^\d+$/.test(amount)) {
+    columns.amountMutez = BigInt(amount);
+  } else if (typeof amount === 'bigint') {
+    columns.amountMutez = amount;
+  }
+
+  const { destinations } = params;
+  if (Array.isArray(destinations) && destinations.every((d) => typeof d === 'string')) {
+    columns.destinations = destinations as readonly string[];
+  }
+
+  if (typeof params.opHash === 'string') columns.opHash = params.opHash;
+
+  const detail = params.reason ?? params.detail;
+  if (typeof detail === 'string') columns.detail = detail;
+
+  return columns;
 }
