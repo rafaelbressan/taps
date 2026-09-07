@@ -100,6 +100,30 @@ export function App() {
     };
   }, []);
 
+  // O banco abre uma vez; `app_status` não pode. Ele carrega o estado da
+  // credencial, e esse estado muda no meio da sessão: importar a credencial
+  // e voltar para o Início mostrava "ausente" — com o bloqueio de volta —
+  // até fechar e reabrir o aplicativo, porque o efeito acima só roda na
+  // montagem. Quem importa, esquece ou salva já chama `refresh`; faltava
+  // alguém reler o status quando ele chama.
+  useEffect(() => {
+    if (revision === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await invoke<AppStatus>('app_status');
+        if (!cancelled) {
+          setReady((current) => (current ? { ...current, status } : current));
+        }
+      } catch (error) {
+        if (!cancelled) setFatal(describe(error));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [revision]);
+
   // Montar o motor depende da configuração estar completa. Enquanto não
   // estiver, `blocked` carrega a frase que a tela mostra — e nenhum tique roda.
   useEffect(() => {
