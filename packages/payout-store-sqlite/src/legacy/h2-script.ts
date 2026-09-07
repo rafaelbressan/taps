@@ -35,7 +35,111 @@ export interface LegacyRow {
   readonly values: ReadonlyMap<string, LegacyValue>;
 }
 
-const INSERT = /INSERT\s+INTO\s+(?:"?[A-Za-z0-9_]+"?\s*\.\s*)?"?([A-Za-z0-9_]+)"?\s*\(([^)]*)\)\s*VALUES/giu;
+/**
+ * `INSERT INTO tabela (colunas) VALUES` — **e** `INSERT INTO tabela VALUES`.
+ *
+ * A lista de colunas é opcional porque o H2 mudou de ideia entre versões: a
+ * 1.3.172, que é a do `.lex` do Lucee, escreve as colunas; a 1.4.200 não
+ * escreve, e a ordem passa a vir do `CREATE TABLE` logo acima. Sem os dois
+ * casos, o baker que instalou um H2 mais novo recebe "não encontrei nenhum
+ * INSERT" sobre um arquivo perfeitamente válido.
+ */
+const INSERT =
+  /INSERT\s+INTO\s+(?:"?[A-Za-z0-9_]+"?\s*\.\s*)?"?([A-Za-z0-9_]+)"?\s*(?:\(([^)]*)\)\s*)?VALUES/giu;
+
+/** `CREATE [CACHED|MEMORY] TABLE [schema.]tabela(` — onde a ordem das colunas está. */
+const CREATE =
+  /CREATE\s+(?:CACHED\s+|MEMORY\s+|GLOBAL\s+TEMPORARY\s+|LOCAL\s+TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?[A-Za-z0-9_]+"?\s*\.\s*)?"?([A-Za-z0-9_]+)"?\s*\(/giu;
+
+/** Palavras que começam uma restrição, não uma coluna. */
+const CONSTRAINT_WORDS = new Set([
+  'primary',
+  'constraint',
+  'unique',
+  'foreign',
+  'key',
+  'check',
+  'index',
+]);
+
+/**
+ * A ordem das colunas de cada tabela, lida dos `CREATE TABLE` do arquivo.
+ *
+ * Só é usada quando o `INSERT` vem sem lista de colunas. Ler o `CREATE` é a
+ * única fonte que existe nesse caso — e é a mesma que o H2 usaria para
+ * reimportar o arquivo.
+ */
+export function parseTableColumns(text: string): Map<string, string[]> {
+  const byTable = new Map<string, string[]>();
+  CREATE.lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = CREATE.exec(text)) !== null) {
+    const table = match[1]!.toLowerCase();
+    const open = CREATE.lastIndex - 1;
+    const body = readParenthesised(text, open);
+    if (body === null) continue;
+
+    const columns: string[] = [];
+    for (const part of splitTopLevel(body)) {
+      const name = /^\s*"?([A-Za-z0-9_]+)"?/u.exec(part)?.[1];
+      if (!name) continue;
+      if (CONSTRAINT_WORDS.has(name.toLowerCase())) continue;
+      columns.push(name.toLowerCase());
+    }
+    if (columns.length > 0) byTable.set(table, columns);
+    CREATE.lastIndex = open + body.length + 2;
+  }
+
+  return byTable;
+}
+
+/** O conteúdo entre `(` em `open` e o `)` que o fecha, respeitando aspas. */
+function readParenthesised(text: string, open: number): string | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let cursor = open; cursor < text.length; cursor += 1) {
+    const char = text[cursor]!;
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return text.slice(open + 1, cursor);
+    }
+  }
+  return null;
+}
+
+/** Divide por vírgula no nível de cima: `DECIMAL(20, 6)` não conta. */
+function splitTopLevel(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = 0;
+  for (let cursor = 0; cursor < body.length; cursor += 1) {
+    const char = body[cursor]!;
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') quote = char;
+    else if (char === '(') depth += 1;
+    else if (char === ')') depth -= 1;
+    else if (char === ',' && depth === 0) {
+      parts.push(body.slice(start, cursor));
+      start = cursor + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts;
+}
 
 /**
  * Every row of every `INSERT` in an H2 script export, in file order.
@@ -45,14 +149,26 @@ const INSERT = /INSERT\s+INTO\s+(?:"?[A-Za-z0-9_]+"?\s*\.\s*)?"?([A-Za-z0-9_]+)"
  */
 export function parseH2Script(text: string): LegacyRow[] {
   const rows: LegacyRow[] = [];
+  const declared = parseTableColumns(text);
   INSERT.lastIndex = 0;
 
   let match: RegExpExecArray | null;
   while ((match = INSERT.exec(text)) !== null) {
     const table = match[1]!.toLowerCase();
-    const columns = match[2]!
-      .split(',')
-      .map((column) => column.trim().replace(/^"|"$/g, '').toLowerCase());
+    const listed = match[2];
+    const columns =
+      listed === undefined
+        ? declared.get(table)
+        : listed
+            .split(',')
+            .map((column) => column.trim().replace(/^"|"$/g, '').toLowerCase());
+    if (!columns) {
+      throw new LegacyParseError(
+        `o INSERT da tabela ${table} não traz a lista de colunas e o arquivo não tem o ` +
+          'CREATE TABLE dela — sem os dois não dá para saber a que coluna cada valor ' +
+          'pertence, e adivinhar seria trocar um endereço por um valor',
+      );
+    }
 
     let cursor = INSERT.lastIndex;
     for (;;) {

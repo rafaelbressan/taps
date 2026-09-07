@@ -1,5 +1,27 @@
 # Database Schema Documentation
 
+> **Correção (BRES-48, 2026-09-07).** Este documento descreve o schema de uma
+> instalação **já atualizada**, e não o que o TAPS em ColdFusion cria numa
+> instalação nova. A diferença foi medida gerando bancos com o DDL real do
+> `components/environment.cfc` (histórico deste repositório, commit `6b598e78`):
+>
+> - `payments.total` e `delegatorsPayments.total` nascem `DECIMAL(20,2)`, não
+>   `DECIMAL(20,6)`. `checkSixDecimals()` (`components/database.cfc:769`) muda
+>   isso depois — dentro de um `<cftry>` que engole a falha.
+> - `transaction_hash` **não existe** no `CREATE TABLE`. Ela é acrescentada por
+>   `addTxHashFields()` (`database.cfc:793`), também dentro de um `<cftry>`.
+> - As colunas `delegate`, `proxy_server`, `proxy_port`, `provider`,
+>   `gas_limit`, `storage_limit`, `transaction_fee`, `block_explorer`,
+>   `num_blocks_wait`, `payment_retries` e `min_between_retries` de `settings`
+>   vêm de `addV120Fields()`, não do `CREATE TABLE`.
+> - A chave primária de `payments` **não chega a existir**: o H2 recusa
+>   `ADD PRIMARY KEY` sobre a coluna anulável `date`, e o `<cftry>` engole.
+>
+> Consequência prática: código escrito só a partir deste documento funciona
+> numa instalação atualizada e quebra na outra. Os quatro bancos reais que
+> cobrem as duas formas estão em
+> `packages/payout-store-sqlite/test/fixtures/legacy/`.
+
 ## Database Overview
 
 **Database Type**: H2 Embedded Database

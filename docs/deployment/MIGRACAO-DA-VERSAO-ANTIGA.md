@@ -54,6 +54,25 @@ importação pela metade.
 O mesmo arquivo não pode ser importado duas vezes, nem com outro nome: o TAPS
 guarda a impressão digital do conteúdo.
 
+### Se o seu TAPS antigo é bem antigo
+
+O TAPS mudou o próprio banco em execução, ao longo dos anos: em algum momento
+ele passou a guardar seis casas decimais em vez de duas, e passou a guardar o
+identificador da operação. Se a sua instalação **nunca rodou uma versão nova**,
+o banco dela tem duas casas e não tem o identificador.
+
+Isso muda o que você vai ver depois de importar, e não é defeito da migração:
+
+- **Valores abaixo de um centavo já estão zerados no seu banco.** Um delegador
+  que recebeu 0,003970 ꜩ está gravado como 0,00 desde o dia do pagamento — o
+  banco arredondou na escrita. A migração traz o que está lá. Recuperar não é
+  possível, e inventar seria pior.
+- **As linhas não têm o identificador da operação.** O TAPS novo mostra "—" na
+  coluna. O pagamento aconteceu; o que falta é o número dele.
+
+Nas duas situações o resto do histórico atravessa inteiro: ciclo, endereço,
+data, resultado e valor.
+
 ## Passo 3 — Confira
 
 Compare três números com o que você sabe:
@@ -70,7 +89,7 @@ Depois: **Backup → Salvar backup.** Agora sim.
 | Do banco antigo | Para onde vai |
 |---|---|
 | `payments` — total pago por ciclo | histórico, com o valor convertido para mutez exatos |
-| `delegatorsPayments` — quem recebeu quanto | histórico, por ciclo e por endereço, com o identificador da operação |
+| `delegatorsPayments` — quem recebeu quanto | histórico, por ciclo e por endereço, com o identificador da operação quando o seu banco tem esse campo |
 | `delegatorsFee` — comissão individual | guardada como fração exata: 5,25% vira 525/10000 |
 | `bondPool` — participantes do bond pool | guardados, com a cota e a taxa administrativa |
 

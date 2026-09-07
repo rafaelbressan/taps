@@ -78,6 +78,13 @@ do arquivo. A versão antiga usava `Math.floor(tez * 1e6)`, que perde um mutez e
 1,15% dos valores, sempre para baixo. Porcentagem vira racional exato: 5,25%
 é 525/10000, nunca 0,0525.
 
+O teste não usa um arquivo que eu escrevi: usa **quatro bancos que o H2 gerou**
+a partir do DDL do próprio TAPS em ColdFusion, em duas versões de H2 (1.3.172,
+a do `.lex` do Lucee, e 1.4.200) e nas duas formas de instalação que existem
+(atualizada e nunca atualizada). A receita e o que eles acharam estão em
+`test/fixtures/legacy/README.md` — inclusive um `INSERT` sem lista de colunas
+que fazia o importador recusar o arquivo inteiro.
+
 Nada de `settings` atravessa além do endereço do baker. As colunas de
 credencial — `pass_hash`, `hash_salt`, `phrase`, `app_phrase` — são lidas,
 contadas e descartadas: são uma carteira cifrada com sal literal e sem
