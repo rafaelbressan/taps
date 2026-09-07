@@ -6,6 +6,7 @@ import {
   INTEGRITY_CHECK,
   SCHEMA_VERSION_QUERY,
   judgeBackup,
+  type SqlRow,
 } from '@tezos-suite/payout-store-sqlite';
 import type { Ready } from '../App';
 import { describe } from '../App';
@@ -24,13 +25,55 @@ import { Fault } from '../ui/Fault';
  * Duas propriedades valem mais que a conveniência, e as duas estão aqui:
  *
  * 1. A cópia sai com o aplicativo aberto e sai **inteira** (`VACUUM INTO`).
- * 2. A restauração **confere antes** de sobrescrever, e o banco substituído é
- *    renomeado, nunca apagado.
+ * 2. A restauração **confere antes** de sobrescrever, **pergunta** antes de
+ *    trocar, e o banco substituído é renomeado, nunca apagado.
  */
+
+/** O que se sabe de um banco olhando só a tabela de ciclos. */
+interface CycleSummary {
+  readonly cycles: number;
+  /** `null` quando o banco não tem ciclo nenhum — não é zero. */
+  readonly newestCycle: number | null;
+}
+
+/** Um candidato conferido, esperando a resposta de quem vai perder o banco atual. */
+interface Candidate {
+  readonly token: string;
+  readonly name: string;
+  readonly schemaVersion: number;
+  readonly backup: CycleSummary;
+  readonly current: CycleSummary;
+}
+
+const CYCLE_SUMMARY_QUERY = 'SELECT COUNT(*) AS n, MAX(cycle) AS newest FROM distributions';
+
+/**
+ * Lê a contagem sem inventar valor.
+ *
+ * `MAX(cycle)` de tabela vazia volta NULL, e `Number(null)` é 0 — que é o
+ * mesmo `|| 0` que fez o sistema antigo pagar zero em silêncio. Aqui a
+ * ausência continua ausência, e a tela mostra travessão.
+ */
+function readCycleSummary(rows: readonly SqlRow[], what: string): CycleSummary {
+  const row = rows[0];
+  if (!row || row.n === null || row.n === undefined) {
+    throw new BackupError(`não consegui contar os ciclos ${what} — não troquei nada`);
+  }
+  return {
+    cycles: Number(row.n),
+    newestCycle: row.newest === null || row.newest === undefined ? null : Number(row.newest),
+  };
+}
+
+function cycleText(value: number | null): string {
+  return value === null ? '—' : String(value);
+}
+
 export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [candidate, setCandidate] = useState<Candidate | null>(null);
 
   async function takeBackup() {
     setError(null);
@@ -57,47 +100,74 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
     }
   }
 
-  async function restore() {
+  /**
+   * Primeiro passo: escolher, conferir e **parar**.
+   *
+   * Escolher o arquivo no diálogo não troca banco nenhum. Esta função nunca
+   * chama `restore_backup`; ela só monta a comparação que a próxima tela
+   * mostra. Quem troca é `confirmRestore`, e só depois de um clique.
+   */
+  async function inspectCandidate() {
     setError(null);
     setMessage(null);
+    setCandidate(null);
     const chosen = await pickFile('backup-to-restore', 'Qual backup restaurar');
     if (!chosen) return;
 
     setBusy(true);
     try {
-      // Confere ANTES de trocar. As mesmas duas consultas do pacote, e o mesmo
-      // julgamento: um arquivo corrompido, que não é do TAPS, ou escrito por
-      // uma versão mais nova é recusado com o motivo, e o banco atual fica como
-      // estava. Conferir não gasta o token — restaurar vem logo depois.
+      // Confere ANTES de qualquer coisa. As mesmas duas consultas do pacote, e
+      // o mesmo julgamento: um arquivo corrompido, que não é do TAPS, ou
+      // escrito por uma versão mais nova é recusado com o motivo, e o banco
+      // atual fica como estava. Conferir não gasta o token — restaurar vem
+      // depois e usa o mesmo.
       const integrity = await queryOtherDatabase(chosen.token, INTEGRITY_CHECK);
       const verdict = integrity[0] ? String(integrity[0].integrity_check) : 'sem resposta';
       const applied = await queryOtherDatabase(chosen.token, SCHEMA_VERSION_QUERY).catch(
         () => [],
       );
-      const version = judgeBackup({
+      const schemaVersion = judgeBackup({
         path: chosen.name,
         integrity: verdict,
         appliedVersions: applied.map((row) => Number(row.version)),
       });
 
-      const rows = await queryOtherDatabase(
-        chosen.token,
-        'SELECT COUNT(*) AS n FROM distributions',
+      const backup = readCycleSummary(
+        await queryOtherDatabase(chosen.token, CYCLE_SUMMARY_QUERY),
+        'do backup',
       );
-      const cycles = rows[0] ? Number(rows[0].n) : 0;
-
-      const confirmed = window.confirm(
-        `${chosen.name} tem ${cycles} ciclo(s) e está na versão de schema ${version}.\n\n` +
-          'Restaurar substitui o banco atual. O banco de agora não é apagado: ele é ' +
-          'renomeado ao lado, e você pode voltar atrás.\n\nRestaurar?',
+      // O banco de agora entra na comparação porque é ele que se perde. Saber
+      // que o backup tem 4 ciclos não diz nada; saber que o seu banco tem 12 é
+      // a frase que evita o estrago.
+      const current = readCycleSummary(
+        await ready.db.query(CYCLE_SUMMARY_QUERY),
+        'do banco atual',
       );
-      if (!confirmed) return;
 
+      setCandidate({ token: chosen.token, name: chosen.name, schemaVersion, backup, current });
+    } catch (caught) {
+      setError(
+        caught instanceof BackupError
+          ? caught.message
+          : `Não restaurei nada. ${describe(caught)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Segundo passo, e o único que troca banco. */
+  async function confirmRestore(chosen: Candidate) {
+    setError(null);
+    setMessage(null);
+    setBusy(true);
+    try {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const result = await invoke<{ replaced_copied_to: string }>('restore_backup', {
         token: chosen.token,
         stamp,
       });
+      setCandidate(null);
       setMessage(
         `Restaurado. O banco anterior ficou em ${result.replaced_copied_to} — ` +
           'apague só quando tiver certeza.',
@@ -114,6 +184,15 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
     }
   }
 
+  function cancelRestore() {
+    setCandidate(null);
+    setMessage('Cancelado. O banco de agora continua sendo o banco de agora.');
+  }
+
+  const losing = candidate
+    ? candidate.current.cycles - candidate.backup.cycles
+    : 0;
+
   return (
     <>
       <h1 className="page__title">Backup</h1>
@@ -124,6 +203,80 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
 
       {error && <Fault what="Não deu certo" where="backup" cost={error} />}
       {message && <p className="note">{message}</p>}
+
+      {candidate && (
+        <section
+          className="t-card"
+          role="group"
+          aria-labelledby="restaurar-confirmacao"
+          style={{ marginTop: 'var(--s-6)' }}
+        >
+          <h2 id="restaurar-confirmacao" className="pair__key">
+            Restaurar a partir de {candidate.name}?
+          </h2>
+          <p className="note">
+            O arquivo passou na conferência (versão de schema {candidate.schemaVersion}).
+            Nada foi trocado ainda.
+          </p>
+
+          <table className="table" style={{ marginTop: 'var(--s-4)' }}>
+            <thead>
+              <tr>
+                <th scope="col">&nbsp;</th>
+                <th scope="col" className="num">
+                  Este backup
+                </th>
+                <th scope="col" className="num">
+                  Seu banco agora
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Ciclos</th>
+                <td className="num">{candidate.backup.cycles}</td>
+                <td className="num">{candidate.current.cycles}</td>
+              </tr>
+              <tr>
+                <th scope="row">Ciclo mais recente</th>
+                <td className="num">{cycleText(candidate.backup.newestCycle)}</td>
+                <td className="num">{cycleText(candidate.current.newestCycle)}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {losing > 0 && (
+            <p className="note" role="alert" style={{ marginTop: 'var(--s-4)' }}>
+              O seu banco tem {losing} ciclo(s) que este backup não tem. Restaurar tira esse
+              registro do banco ativo — confira se é mesmo o arquivo certo.
+            </p>
+          )}
+
+          <p className="note" style={{ marginTop: 'var(--s-4)' }}>
+            Restaurar substitui o banco atual. O banco de agora não é apagado: ele é renomeado
+            ao lado, com data e hora no nome, e você pode voltar atrás.
+          </p>
+
+          <div className="row" style={{ marginTop: 'var(--s-4)' }}>
+            <button
+              type="button"
+              className="t-button"
+              disabled={busy}
+              onClick={() => void confirmRestore(candidate)}
+            >
+              Restaurar
+            </button>
+            <button
+              type="button"
+              className="t-button t-button--quiet"
+              disabled={busy}
+              onClick={cancelRestore}
+            >
+              Cancelar
+            </button>
+          </div>
+        </section>
+      )}
 
       <div className="grid" style={{ marginTop: 'var(--s-6)' }}>
         <section className="t-card">
@@ -141,15 +294,16 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
         <section className="t-card">
           <h2 className="pair__key">Restaurar de uma cópia</h2>
           <p className="note">
-            O arquivo é conferido antes de qualquer coisa ser trocada. O banco de agora é
-            renomeado ao lado, nunca apagado.
+            O arquivo é conferido antes de qualquer coisa ser trocada, e o TAPS mostra quantos
+            ciclos ele tem e pergunta antes de trocar. O banco de agora é renomeado ao lado,
+            nunca apagado.
           </p>
           <div className="row" style={{ marginTop: 'var(--s-4)' }}>
             <button
               type="button"
               className="t-button t-button--quiet"
-              disabled={busy}
-              onClick={restore}
+              disabled={busy || candidate !== null}
+              onClick={inspectCandidate}
             >
               Restaurar backup
             </button>

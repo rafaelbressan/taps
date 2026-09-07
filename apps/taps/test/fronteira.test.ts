@@ -83,6 +83,18 @@ describe('a janela não escolhe destino de rede', () => {
   });
 });
 
+describe('a confirmação é da tela, não do navegador', () => {
+  it('nenhuma pergunta destrutiva sai por `window.confirm`', () => {
+    // BRES-124: a confirmação da restauração era um `window.confirm`. Na
+    // webview do Linux nenhuma janela apareceu e o banco foi trocado assim
+    // mesmo — duas vezes. Um diálogo que o aplicativo não desenha é um
+    // diálogo que ele não consegue garantir nem testar.
+    for (const file of files) {
+      expect(code(file), file).not.toMatch(/\bwindow\.(confirm|alert|prompt)\s*\(/);
+    }
+  });
+});
+
 describe('a janela não escolhe arquivo', () => {
   it('o plugin de diálogo não é chamado do lado do JavaScript', () => {
     for (const file of files) {

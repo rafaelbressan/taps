@@ -68,8 +68,19 @@ motivo se ele:
 
 Nos quatro casos o banco atual fica exatamente como estava.
 
-Passando na conferência, o TAPS mostra quantos ciclos o backup tem e pergunta
-se pode seguir. Se você disser que sim:
+Passando na conferência, o TAPS **para e pergunta**, na própria tela. Escolher
+o arquivo no diálogo não troca nada. O que ele mostra antes da pergunta é a
+comparação entre os dois bancos:
+
+|                     | Este backup | Seu banco agora |
+| ------------------- | ----------: | --------------: |
+| Ciclos              |           4 |              12 |
+| Ciclo mais recente  |         808 |             824 |
+
+É essa comparação que revela o arquivo errado **antes** da troca. Se o banco de
+agora tem ciclos que o backup não tem, o TAPS diz quantos são.
+
+Só depois de você clicar em **Restaurar**:
 
 1. O banco de agora é **renomeado ao lado**, com data e hora no nome. Ele não é
    apagado.
