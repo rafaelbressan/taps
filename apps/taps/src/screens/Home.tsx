@@ -173,10 +173,14 @@ export function Home(props: {
             <span className="pair__value">
               {chainError ? (
                 <span className="t-field__error">não lido</span>
-              ) : headCycle === null ? (
+              ) : headCycle !== null ? (
+                <span className="t-cycle">{headCycle}</span>
+              ) : runtime ? (
+                // Só há esqueleto enquanto existe pedido em voo. Sem motor não
+                // há pedido: o efeito acima nem chega a perguntar o ciclo.
                 <span className="t-skeleton" />
               ) : (
-                <span className="t-cycle">{headCycle}</span>
+                <span className="t-field__error">não lido</span>
               )}
             </span>
           </div>
