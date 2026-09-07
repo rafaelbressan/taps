@@ -39,7 +39,7 @@ const FIELDS: readonly Field[] = [
     key: SETTING_KEYS.network,
     label: 'Rede',
     hint: 'mainnet move dinheiro de verdade. Comece numa rede de teste.',
-    placeholder: 'ghostnet',
+    placeholder: 'shadownet',
   },
   {
     key: SETTING_KEYS.rpcUrl,
@@ -51,7 +51,7 @@ const FIELDS: readonly Field[] = [
     key: SETTING_KEYS.tzktApiUrl,
     label: 'Endereço da TzKT',
     hint: 'De onde vêm o ciclo, o split de recompensa e o estado da operação.',
-    placeholder: 'https://api.ghostnet.tzkt.io',
+    placeholder: 'https://api.shadownet.tzkt.io',
   },
   {
     key: SETTING_KEYS.signerUrl,
