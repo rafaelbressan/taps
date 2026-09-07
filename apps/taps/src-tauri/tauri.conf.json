@@ -26,8 +26,18 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage", "nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.ico"],
+    "targets": [
+      "deb",
+      "appimage",
+      "nsis"
+    ],
+    "publisher": "Tezos.Rio",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
     "category": "Finance",
     "shortDescription": "Distribuição de recompensas para bakers Tezos",
     "longDescription": "TAPS distribui as recompensas de um baker Tezos aos seus delegadores. Roda na máquina do baker, guarda tudo em SQLite e assina no octez-signer — nunca guarda a chave de pagamento."

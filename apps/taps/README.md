@@ -122,9 +122,13 @@ revisão do Suite Design & Journey.
 
 | Alvo | Como | Situação |
 |---|---|---|
-| Linux | `npm run tauri build --bundles deb,appimage` | verificado |
-| Windows | `npm run tauri build --bundles nsis` num host Windows | **não verificado aqui** — não há máquina Windows nem toolchain MSVC nesta máquina |
+| Windows 10/11 | artefato `nsis` do CI | **instalado e rodado de verdade** (BRES-110) — instala sem privilégio de administrador, abre, renderiza, e recusa operar sem configuração |
+| Linux | artefato `deb`/`appimage` do CI | empacota e o binário sobe; **a janela não foi vista** — falta um desktop Linux de verdade |
 | iOS / macOS | — | fora do escopo (ADR-0001 §8) |
+
+O instalador **não é assinado**. O Windows mostra o aviso do SmartScreen na
+primeira execução, e isso continua assim até existir um certificado — que é
+gasto e decisão do Rafael, não da squad.
 
 O `.github/workflows/desktop.yml` monta os dois num runner de cada sistema.
 
