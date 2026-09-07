@@ -83,7 +83,14 @@ a partir do DDL do próprio TAPS em ColdFusion, em duas versões de H2 (1.3.172,
 a do `.lex` do Lucee, e 1.4.200) e nas duas formas de instalação que existem
 (atualizada e nunca atualizada). A receita e o que eles acharam estão em
 `test/fixtures/legacy/README.md` — inclusive um `INSERT` sem lista de colunas
-que fazia o importador recusar o arquivo inteiro.
+que fazia o importador recusar o arquivo inteiro. O quinto arquivo,
+`bres-125-taps-export.sql`, é o export que um baker anexou ao BRES-125 quando a
+Migração o recusou; ele entra na suíte como veio.
+
+Quando o importador não lê nada, ele conta o que o arquivo **tem** — quantos
+`INSERT`, quantos `CREATE TABLE`, que tabelas — em vez de afirmar que não há
+`INSERT` nenhum. E um `INSERT` que ele não entende é uma recusa com o trecho,
+nunca um comando pulado: pular um é apagar um ciclo de pagamento em silêncio.
 
 Nada de `settings` atravessa além do endereço do baker. As colunas de
 credencial — `pass_hash`, `hash_salt`, `phrase`, `app_phrase` — são lidas,
@@ -95,7 +102,7 @@ um produto que decidiu não guardar chave nenhuma.
 
 ```bash
 npm ci
-npm run verify   # sem number no caminho do dinheiro + tipos + 94 testes
+npm run verify   # sem number no caminho do dinheiro + tipos + 105 testes
 ```
 
 `node:sqlite` exige Node 22.
