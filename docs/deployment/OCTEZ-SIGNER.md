@@ -119,12 +119,31 @@ cd ~/taps-signer
 openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
   -keyout tls.key -out tls.crt \
   -subj "/CN=taps-signer" \
-  -addext "subjectAltName=IP:192.168.1.20,DNS:taps-signer"
+  -addext "subjectAltName=IP:192.168.1.20,DNS:taps-signer" \
+  -addext "basicConstraints=critical,CA:FALSE"
 ```
 
 Troque `192.168.1.20` pelo endereço que a máquina do TAPS vai usar para chegar
 no signer. Anote a data: **o certificado vence em um ano**, e quando vencer o
 TAPS para de conseguir assinar. Ponha um lembrete.
+
+Duas linhas deste comando não são detalhe, e a versão anterior deste guia não
+tinha nenhuma das duas (BRES-137):
+
+- **`basicConstraints=critical,CA:FALSE`.** Sem ela, o `openssl req -x509`
+  marca o certificado como autoridade (`CA:TRUE`), e a biblioteca de TLS do
+  TAPS recusa um certificado de autoridade sendo usado como certificado de
+  servidor — com a mensagem `CaUsedAsEndEntity`. O `curl` aceita, o que torna
+  esse erro especialmente traiçoeiro: o teste de mesa passa e o pagamento não.
+- **O endereço no `subjectAltName`.** Ele precisa ser *exatamente* o que está
+  em `signer.url` no TAPS: `IP:` para número, `DNS:` para nome. Um certificado
+  emitido para `taps-signer` não vale para `https://192.168.1.20:6732`.
+
+Anote também a impressão digital — você vai compará-la no TAPS:
+
+```bash
+openssl x509 -noout -fingerprint -sha256 -in tls.crt
+```
 
 ## Passo 4 — Suba o daemon
 
@@ -156,6 +175,34 @@ E as que **não** podem entrar:
 | `--allow-list-known-keys` | conta para quem perguntar quais chaves o signer guarda |
 | `--allow-to-prove-possession` | não é preciso para pagar |
 | `launch http signer` | corpo em claro |
+
+---
+
+## Passo 5 — Diga ao TAPS que este certificado é o seu
+
+Leve o **`tls.crt`** (só ele — a `tls.key` fica no host do signer e não sai de
+lá) para a máquina do TAPS. Em **Configuração → Certificado do octez-signer**,
+escolha o arquivo.
+
+O TAPS mostra o SHA-256 do que importou. **Compare com o que você anotou no
+passo 3.** Se forem iguais, você fixou o certificado certo.
+
+Por que esse passo existe, dito sem rodeio: o TAPS confia **neste certificado e
+em mais nenhum**. Não nas autoridades públicas que vêm no aplicativo, não no
+truststore do sistema. Nenhuma autoridade pública tem o que dizer sobre um
+daemon em `192.168.1.20`, e este é o canal que carrega os bytes que o signer
+vai assinar — a lista de quem pode falar nele tem um nome só, o seu.
+
+Consequências que valem estar escritas:
+
+- **Enquanto não houver certificado importado, o TAPS não fala com signer
+  nenhum.** Não existe "tenta com as CAs públicas e vê no que dá".
+- **Quando você trocar o certificado do signer** — porque venceu, ou porque
+  mudou o endereço —, importe o novo aqui no mesmo passo. Até lá o TAPS recusa
+  a conexão e diz que o certificado apresentado não é o que está importado.
+- **O certificado entra no backup** do banco, ao contrário da credencial de
+  cliente. É público; restaurar noutra máquina não deveria mandar você de volta
+  ao host do signer buscar um arquivo que qualquer um pode ver.
 
 ---
 
@@ -229,7 +276,11 @@ diferente de onde você guarda a senha.
 | O que a tela diz | O que costuma ser |
 |---|---|
 | "não consegui falar com o octez-signer" | daemon parado, ou travado esperando a senha depois de um reinício |
-| erro de certificado | o TLS venceu, ou o endereço que o TAPS usa não está no `subjectAltName` |
+| "falta o certificado do signer nesta máquina" | o passo 5 não foi feito, ou o certificado foi esquecido em Configuração |
+| "o signer apresentou um certificado marcado como autoridade (`CA:TRUE`)" | o `tls.crt` foi gerado sem `basicConstraints=critical,CA:FALSE` — gere de novo e reimporte |
+| "o certificado do signer não vale para o endereço configurado" | o `subjectAltName` não traz o endereço que está em `signer.url` |
+| "o certificado do signer está fora da validade" | venceu — gere um novo no host e reimporte no TAPS |
+| "o certificado que o signer apresentou não é o que está importado aqui" | o certificado do signer foi trocado e o TAPS ainda tem o antigo — ou você não está falando com o signer que pensa |
 | "o signer recusou o pedido" | a credencial de cliente não foi autorizada, ou foi trocada |
 | "não há credencial de cliente guardada nesta máquina" | o cofre do sistema não tem a chave — reimporte pela Configuração |
 
@@ -259,6 +310,9 @@ O que protege de verdade, e por isso não é opcional:
 - **Rede** — só a máquina do TAPS deveria alcançar a porta 6732.
 - **A credencial no cofre do sistema operacional**, do lado do TAPS, sem
   atravessar para a janela do aplicativo e sem entrar no backup.
+- **O certificado do signer fixado no TAPS** — o canal só aceita o seu
+  certificado, então ninguém se põe no meio apresentando um certificado que
+  alguma autoridade pública assinou.
 
 E é por isso que o arquivo com a credencial deve ser apagado da máquina do TAPS
 depois de importado, e que o TAPS recusa um arquivo com mais de uma chave: o

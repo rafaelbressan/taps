@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 pub enum Purpose {
     /// Arquivo da credencial de cliente do `octez-signer`.
     SignerCredential,
+    /// Certificado TLS do host do `octez-signer` (`tls.crt`), que é público.
+    SignerCertificate,
     /// Arquivo exportado do banco da versão antiga.
     LegacyExport,
     /// Backup a restaurar.

@@ -131,6 +131,21 @@ Três coisas para conferir aí:
 Essa credencial não guarda os seus fundos, mas quem a tiver consegue pedir ao
 seu signer que assine uma transferência. Trate-a como uma chave.
 
+Por último, ainda em **Configuração**, clique em **Escolher o certificado do
+signer** e aponte para o `tls.crt` do host — o certificado, não a chave. O TAPS
+mostra o SHA-256 do que importou; compare com o que o host imprime:
+
+```bash
+openssl x509 -noout -fingerprint -sha256 -in tls.crt
+```
+
+O TAPS confia **nesse certificado e em mais nenhum**. Não nas autoridades
+públicas que vêm no aplicativo, não no truststore do sistema: nenhuma delas tem
+o que dizer sobre um daemon na sua rede, e esse é o canal que carrega os bytes
+que o signer vai assinar. Enquanto não houver certificado importado, o TAPS não
+fala com signer nenhum — e diz isso na tela de início. Quando o certificado do
+signer for trocado, importe o novo aqui.
+
 ### O que você **não** vai encontrar na configuração, e por quê
 
 - **Usuário e senha.** Não há página na internet, então não há a quem

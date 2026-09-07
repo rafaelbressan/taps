@@ -83,8 +83,15 @@ cd ~/taps-signer
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
   -keyout tls.key -out tls.crt \
   -subj "/CN=taps-signer" \
-  -addext "subjectAltName=DNS:taps-signer,DNS:localhost,IP:127.0.0.1"
+  -addext "subjectAltName=DNS:taps-signer,DNS:localhost,IP:127.0.0.1" \
+  -addext "basicConstraints=critical,CA:FALSE"
 ```
+
+O `basicConstraints=critical,CA:FALSE` não é enfeite (BRES-137). Sem ele o
+`openssl req -x509` marca o certificado como autoridade, o Node aceita mesmo
+assim — e o **aplicativo desktop recusa**, com `CaUsedAsEndEntity`. Um
+certificado que passa no harness e falha no TAPS é o pior dos dois mundos;
+gere-o já do jeito que os dois aceitam.
 
 Se o signer for rodar em outra máquina, troque o `subjectAltName` pelo IP ou nome que a
 máquina do harness vai usar (o IP da Tailscale, por exemplo).

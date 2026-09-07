@@ -126,6 +126,9 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
   const [credentialPublicKey, setCredentialPublicKey] = useState(
     ready.status.signer_credential_public_key,
   );
+  const [certificateFingerprint, setCertificateFingerprint] = useState(
+    ready.status.signer_certificate_fingerprint,
+  );
 
   useEffect(() => {
     (async () => {
@@ -174,6 +177,45 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       });
       setCredentialPresent(true);
       setCredentialPublicKey(imported.public_key);
+      onSaved();
+    } catch (caught) {
+      setError(describe(caught));
+    }
+  }
+
+  /**
+   * O certificado do signer, que é público — e ainda assim entra por arquivo.
+   *
+   * Não por segredo: por caminho. O Rust é quem abre o diálogo e quem lê o
+   * arquivo, como em todo o resto deste aplicativo, e o que a tela recebe de
+   * volta é a impressão digital para o baker conferir com o
+   * `openssl x509 -fingerprint -sha256` no host do signer. Essa conferência é
+   * a única que o TLS não faz sozinho: ele garante que o servidor tem a chave
+   * do certificado fixado, não que o certificado fixado é o do seu signer.
+   */
+  async function importCertificate() {
+    setError(null);
+    try {
+      const chosen = await pickFile(
+        'signer-certificate',
+        'Certificado TLS do host do octez-signer (tls.crt)',
+      );
+      if (!chosen) return;
+      const imported = await invoke<{ fingerprint: string }>('signer_import_certificate', {
+        token: chosen.token,
+      });
+      setCertificateFingerprint(imported.fingerprint);
+      onSaved();
+    } catch (caught) {
+      setError(describe(caught));
+    }
+  }
+
+  async function forgetCertificate() {
+    setError(null);
+    try {
+      await invoke('signer_forget_certificate');
+      setCertificateFingerprint(null);
       onSaved();
     } catch (caught) {
       setError(describe(caught));
@@ -246,6 +288,44 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
           </button>
           {credentialPresent && (
             <button type="button" className="t-button t-button--quiet" onClick={forgetCredential}>
+              Esquecer
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="t-card" style={{ marginBottom: 'var(--s-6)' }}>
+        <h2 className="pair__key">Certificado do octez-signer</h2>
+        <p className="note">
+          O TAPS confia <strong>neste certificado e em mais nenhum</strong>. As autoridades
+          públicas não entram: elas não têm nada a dizer sobre um daemon na sua rede, e este é o
+          canal que carrega os bytes que o signer vai assinar. Enquanto não houver certificado
+          importado, o TAPS não fala com signer nenhum — de propósito.
+        </p>
+        <div className="pair">
+          <span className="pair__key">Estado</span>
+          <span className="pair__value">{certificateFingerprint ? 'fixado' : 'ausente'}</span>
+        </div>
+        {certificateFingerprint && (
+          <div className="pair">
+            <span className="pair__key">SHA-256</span>
+            <span className="pair__value t-address" title={certificateFingerprint}>
+              {certificateFingerprint}
+            </span>
+          </div>
+        )}
+        <p className="note" style={{ marginTop: 'var(--s-3)' }}>
+          Escolha o <code>tls.crt</code> do host do signer — o certificado, não a chave. Depois
+          compare a impressão digital acima com a que o host imprime:{' '}
+          <code>openssl x509 -noout -fingerprint -sha256 -in tls.crt</code>. Se as duas forem
+          iguais, você fixou o certificado certo; o TLS cuida do resto.
+        </p>
+        <div className="row" style={{ marginTop: 'var(--s-4)' }}>
+          <button type="button" className="t-button" onClick={importCertificate}>
+            Escolher o certificado do signer
+          </button>
+          {certificateFingerprint && (
+            <button type="button" className="t-button t-button--quiet" onClick={forgetCertificate}>
               Esquecer
             </button>
           )}

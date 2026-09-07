@@ -42,5 +42,13 @@ bs58 = { version = "=0.5.1", features = ["check"] }
 zeroize = "=1.8.2"
 url = "=2.5.7"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+# `rustls-tls` traz o conjunto estático da Mozilla (`webpki-roots`), que é o
+# certo para a TzKT e para um nó público — e não serve para o signer do baker.
+# O canal de assinatura confia num certificado só, importado pelo baker, com
+# `tls_built_in_root_certs(false)` (BRES-137, `signer.rs`).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Impressão digital do certificado do signer, para o baker conferir contra o
+# `openssl x509 -fingerprint -sha256` do host. Só isso.
+sha2 = "=0.10.9"
+base64 = "=0.22.1"
 tokio = { version = "1", features = ["time"] }

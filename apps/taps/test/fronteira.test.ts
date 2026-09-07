@@ -81,6 +81,16 @@ describe('a janela não escolhe destino de rede', () => {
     expect(call, 'a chamada ao signer mudou de forma').not.toBeNull();
     expect(call![1]).not.toContain('url');
   });
+
+  it('a janela também não escolhe em quem o canal do signer confia', () => {
+    // BRES-137: o certificado que o TAPS aceita do signer é lido pelo Rust,
+    // da mesma configuração de onde sai o endereço. Se ele passasse como
+    // parâmetro, "a tela não escolhe destino" valeria para o endereço e não
+    // para a confiança — que é a metade que decide se o destino é o certo.
+    const runtime = code(join(appRoot, 'src/lib/runtime.ts'));
+    const call = /invoke<[^>]*>\('signer_call',\s*\{([^}]*)\}/.exec(runtime);
+    expect(call![1]).not.toMatch(/\b(ca|cert|certificate|pem)\b/i);
+  });
 });
 
 describe('a confirmação é da tela, não do navegador', () => {
@@ -110,7 +120,7 @@ describe('a janela não escolhe arquivo', () => {
   });
 
   it('nenhum comando de arquivo recebe caminho', () => {
-    const withPath = /invoke<[^>]*>\('(read_legacy_export|inspect_database|restore_backup|backup_into|signer_import_credential)',\s*\{([^}]*)\}/g;
+    const withPath = /invoke<[^>]*>\('(read_legacy_export|inspect_database|restore_backup|backup_into|signer_import_credential|signer_import_certificate)',\s*\{([^}]*)\}/g;
     for (const file of files) {
       const source = code(file);
       for (const match of source.matchAll(withPath)) {

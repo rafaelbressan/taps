@@ -45,6 +45,13 @@ interface AppStatus {
   readonly signer_credential_present: boolean;
   /** O `edpk` da credencial guardada. Público — a chave privada não sai do Rust. */
   readonly signer_credential_public_key: string | null;
+  /**
+   * SHA-256 do certificado do signer fixado nesta máquina, ou `null`.
+   *
+   * O canal de assinatura confia neste certificado e em mais nenhum — nem nas
+   * autoridades públicas (BRES-137). Sem ele o Rust recusa a chamada.
+   */
+  readonly signer_certificate_fingerprint: string | null;
   readonly platform: string;
   readonly version: string;
 }
@@ -131,6 +138,19 @@ export function App() {
               'Falta a credencial de cliente do octez-signer. É com ela que este computador ' +
                 'prova ao signer quem está pedindo, e sem ela o signer recusa o pedido. Abra ' +
                 'Configuração e escolha o arquivo da chave que você autorizou no signer.',
+            );
+          }
+          return;
+        }
+
+        if (!ready.status.signer_certificate_fingerprint) {
+          if (!cancelled) {
+            setSettings(parsed);
+            setRuntime(null);
+            setBlocked(
+              'Falta o certificado do octez-signer. O TAPS confia num certificado só — o seu — ' +
+                'e não nas autoridades públicas, que não têm nada a dizer sobre um daemon na sua ' +
+                'rede. Abra Configuração e importe o tls.crt do host do signer.',
             );
           }
           return;

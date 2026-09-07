@@ -90,6 +90,35 @@ impl AppState {
         }))
     }
 
+    /// Escreve um valor de `app_settings` **deste lado**.
+    ///
+    /// O certificado do signer entra por aqui e não pelo `writeRawSettings` da
+    /// tela: quem valida o PEM é o Rust, e um valor validado que a janela
+    /// pudesse reescrever depois não estaria validado.
+    fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.with_db(|database| {
+            database.execute(
+                None,
+                "INSERT INTO app_settings (key, value) VALUES (?1, ?2) \
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                &[
+                    SqlValue::Text(key.to_string()),
+                    SqlValue::Text(value.to_string()),
+                ],
+            )
+        })
+    }
+
+    fn delete_setting(&self, key: &str) -> Result<(), String> {
+        self.with_db(|database| {
+            database.execute(
+                None,
+                "DELETE FROM app_settings WHERE key = ?1",
+                &[SqlValue::Text(key.to_string())],
+            )
+        })
+    }
+
     fn require_setting(&self, key: &str, why: &str) -> Result<String, String> {
         self.setting(key)?
             .ok_or_else(|| format!("falta configurar {why} — abra Configuração"))
@@ -115,6 +144,11 @@ pub struct AppStatus {
     signer_credential_present: bool,
     /// O `edpk` da credencial guardada, para conferir com o signer. Público.
     signer_credential_public_key: Option<String>,
+    /// SHA-256 do certificado do signer fixado nesta máquina, se houver.
+    ///
+    /// `None` significa que o TAPS não fala com signer nenhum: o canal de
+    /// assinatura confia num certificado só, e sem ele `signer::call` recusa.
+    signer_certificate_fingerprint: Option<String>,
     platform: String,
     version: String,
 }
@@ -123,6 +157,11 @@ pub struct AppStatus {
 fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
     let present = signer::credential_present();
     AppStatus {
+        signer_certificate_fingerprint: state
+            .setting(SIGNER_CA_PEM)
+            .ok()
+            .flatten()
+            .and_then(|pem| signer::fingerprint(&pem).ok()),
         database_path: state.path.to_string_lossy().to_string(),
         signer_credential_present: present,
         signer_credential_public_key: if present {
@@ -235,6 +274,35 @@ fn signer_forget_credential() -> Result<(), String> {
     signer::forget_credential()
 }
 
+/// Onde mora o certificado que este TAPS aceita do signer.
+///
+/// No banco, e não no cofre do sistema: é certificado, não segredo. Ficar no
+/// banco é o que faz o backup levá-lo junto — restaurar noutra máquina não
+/// deve exigir voltar ao host do signer buscar um arquivo público.
+const SIGNER_CA_PEM: &str = "signer.tls_ca_pem";
+
+/// Importa o certificado TLS do host do signer.
+///
+/// O que volta para a tela é a impressão digital, para o baker conferir com
+/// `openssl x509 -noout -fingerprint -sha256 -in tls.crt` no host do signer.
+/// É a única checagem que o TLS não faz por ele: o TLS confirma que o servidor
+/// tem a chave do certificado fixado, não que o certificado fixado é o certo.
+#[tauri::command]
+fn signer_import_certificate(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<signer::ImportedCertificate, String> {
+    let path = state.picked.take(Purpose::SignerCertificate, &token)?;
+    let imported = signer::read_certificate_from_file(&path)?;
+    state.set_setting(SIGNER_CA_PEM, &imported.pem)?;
+    Ok(imported)
+}
+
+#[tauri::command]
+fn signer_forget_certificate(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.delete_setting(SIGNER_CA_PEM)
+}
+
 /// Assina o pedido de autenticação do signer.
 ///
 /// Substitui o antigo `signer_reveal_credential`, que entregava o segredo à
@@ -253,7 +321,9 @@ async fn signer_call(
     body: Option<String>,
 ) -> Result<signer::SignerResponse, String> {
     let base = state.require_setting("signer.url", "o endereço do octez-signer")?;
-    signer::call(&base, &method, &path, body).await
+    // Lido deste lado, como o endereço: a janela não escolhe em quem confiar.
+    let ca_pem = state.setting(SIGNER_CA_PEM)?;
+    signer::call(&base, ca_pem.as_deref(), &method, &path, body).await
 }
 
 // ---------------------------------------------------------------- cadeia
@@ -420,6 +490,8 @@ pub fn run() {
             pick_save_path,
             signer_import_credential,
             signer_forget_credential,
+            signer_import_certificate,
+            signer_forget_certificate,
             signer_authenticate,
             signer_call,
             chain_request,

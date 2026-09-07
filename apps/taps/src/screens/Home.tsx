@@ -213,8 +213,15 @@ export function Home(props: {
               {ready.status.signer_credential_present ? 'no cofre do sistema' : 'ausente'}
             </span>
           </div>
+          <div className="pair">
+            <span className="pair__key">Certificado do signer</span>
+            <span className="pair__value">
+              {ready.status.signer_certificate_fingerprint ? 'fixado' : 'ausente'}
+            </span>
+          </div>
           <p className="note" style={{ marginTop: 'var(--s-3)' }}>
-            A chave que paga fica no host do <code>octez-signer</code> e nunca chega aqui.
+            A chave que paga fica no host do <code>octez-signer</code> e nunca chega aqui. O canal
+            até ele confia num certificado só — o que você importou.
           </p>
         </section>
       </div>
