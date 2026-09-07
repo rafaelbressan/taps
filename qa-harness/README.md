@@ -307,6 +307,7 @@ do split, não do motor.
 
 | job | quando roda | o que impõe |
 |---|---|---|
+| `workflow-branches` | todo push e PR | todo workflow do repo dispara na branch padrão — e a checagem prova que sabe reprovar |
 | `harness-selftest` | todo push e PR | tipos + `selftest --offline`: os cenários conseguem reprovar, sem rede nem chave |
 | `detect-app` | todo push e PR | existe `src-tauri/Cargo.toml`? |
 | `build` (linux, windows, android) | só quando `detect-app` diz que sim | os três alvos da ADR-0001 buildam |
@@ -320,6 +321,19 @@ Decisão de Rafael em 2026-08-30.
 
 Ninguém precisa lembrar de ligar o job depois: ele passa a valer sozinho no commit que
 criar `src-tauri/Cargo.toml`.
+
+### Por que existe um job só para conferir gatilho de workflow
+
+Um workflow que nunca executou é indistinguível, na tela, de um workflow aprovado: o
+GitHub não mostra nada, e "nada" se lê como "sem problema". O `ci.yml` legado observava
+`[main, staging, develop]` num repositório cuja branch padrão é `master` — 450 linhas de
+lint, build e teste que não rodaram uma única vez, em nenhum commit. Foi esse ponto cego
+que deixou 12 erros `TS2300` sobreviverem sem ninguém notar (BRES-72). O arquivo foi
+apagado; o `workflow-branches` existe para o próximo não durar meses.
+
+A branch padrão vem de `github.event.repository.default_branch`, lida em execução —
+nunca escrita no arquivo. Mesma regra das constantes de protocolo: valor que pertence ao
+sistema externo se lê do sistema externo.
 
 > A detecção é um job com checkout, não um `if: hashFiles(...)` no job de build.
 > `hashFiles()` num `if` de job roda **antes** do checkout, sobre um workspace vazio, e
