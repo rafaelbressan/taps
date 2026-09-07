@@ -3,6 +3,7 @@ export * from './attribution';
 export * from './batch/estimate';
 export * from './batch/plan';
 export * from './confirmation';
+export * from './default-fetch';
 export * from './errors';
 export * from './mutez';
 export * from './network';
