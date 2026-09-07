@@ -18,6 +18,15 @@ body {
   min-height: 100vh;
 }
 
+/* Item de grade tem `min-width: auto`: sem isto a largura mínima do conteúdo
+   da tabela empurra a coluna, e a barra de rolagem volta para a página em vez
+   de ficar dentro da moldura da tabela, que é onde ela pertence. */
+.shell > * { min-width: 0; }
+
+/* A barra escura. `t-dark` não é enfeite: é a única forma suportada de usar as
+   primitivas da suíte sobre fundo escuro, e é o que troca o anel de foco de
+   ink (1,00:1 sobre ink — invisível) por gold (9,46:1). Sem esta classe a
+   navegação inteira fica sem foco visível pelo teclado. */
 .rail {
   background: var(--c-ink);
   color: var(--c-paper-dim);
@@ -103,10 +112,45 @@ body {
   gap: var(--s-4);
 }
 
+/* Título de cartão. Antes era `pair__key`, a mesma classe do rótulo de cada
+   linha de dentro — o título ficava do tamanho e da cor do conteúdo, e o
+   cartão não tinha hierarquia nenhuma. */
+.card__title {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: var(--t-md);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--s-4);
+}
+
 .pair { display: flex; justify-content: space-between; gap: var(--s-4); padding: var(--s-2) 0; }
 .pair + .pair { border-top: 1px solid var(--c-hairline); }
 .pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); }
 .pair__value { font-family: var(--f-data); text-align: right; }
+
+/* Caminho de arquivo e chave pública: são para conferir, não para caber. Quebram
+   à esquerda, em bloco, e não empurrados contra a margem direita. */
+.pair--block { display: block; }
+.pair--block .pair__key { display: block; }
+.pair--block .pair__value {
+  display: block;
+  text-align: left;
+  word-break: break-all;
+  font-size: var(--t-sm);
+  margin-top: var(--s-1);
+}
+
+/* A moldura da tabela.
+   Ela existe por contraste, não por gosto: `t-status--pending` sobre paper dá
+   4,31:1 e reprova; sobre surface dá 5,05:1 e passa. A tabela de dinheiro fica
+   sobre surface, sempre — a mesma regra que tokens.css já fixa para campo. */
+.table__frame {
+  background: var(--c-surface);
+  border: 1px solid var(--c-ink);
+  overflow-x: auto;
+}
 
 .table { width: 100%; border-collapse: collapse; }
 .table th {
@@ -116,15 +160,163 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--c-steel-deep);
-  padding: var(--s-2) var(--s-3);
+  padding: var(--s-3);
   border-bottom: 1px solid var(--c-ink);
+  white-space: nowrap;
 }
 .table td {
-  padding: var(--s-2) var(--s-3);
-  border-bottom: 1px solid var(--c-hairline);
+  padding: var(--s-3);
+  /* steel, não hairline: hairline dá 1,25:1 e o próprio tokens.css o declara
+     régua decorativa que "não separa dois blocos sozinha". Aqui a régua é o
+     que permite conferir o valor de uma linha contra o da linha de baixo. */
+  border-bottom: 1px solid var(--c-steel);
   font-family: var(--f-data);
   font-variant-numeric: tabular-nums;
+  vertical-align: top;
 }
+.table tbody tr:last-child td { border-bottom: 0; }
 .table td.num, .table th.num { text-align: right; }
+/* A unidade sai de cada célula e sobe para o cabeçalho: repetida oitenta vezes
+   ela vira ruído, e tirá-la aproxima as colunas de números. */
+.table__unit { font-family: var(--f-data); text-transform: none; letter-spacing: 0; }
 
 .note { font-size: var(--t-sm); color: var(--c-steel-deep); max-width: var(--measure); }
+
+/* O veredito da tela de Início. Uma linha, antes de tudo, respondendo a
+   pergunta que o baker faz de relance. */
+.verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-ink);
+  border-left: 8px solid var(--c-steel);
+  padding: var(--s-4) var(--s-6);
+  margin-bottom: var(--s-6);
+}
+.verdict--ok       { border-left-color: var(--c-positive);  }
+.verdict--attention{ border-left-color: var(--c-attention); }
+.verdict--stopped  { border-left-color: var(--c-negative);  }
+.verdict__what {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: var(--t-md);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+}
+.verdict__why { color: var(--c-steel-deep); font-size: var(--t-sm); }
+
+/* Os campos ficam sobre surface porque o sublinhado de foco é gold-deep, e
+   gold-deep sobre paper dá 2,71:1 — abaixo dos 3:1 que um indicador de foco
+   precisa. tokens.css já avisa: "Campo vai sobre surface, sempre." */
+.panel {
+  background: var(--c-surface);
+  border: 1px solid var(--c-ink);
+  padding: var(--s-6);
+  margin-bottom: var(--s-4);
+}
+.panel__title {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: var(--t-md);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--s-1);
+}
+.panel__why { color: var(--c-steel-deep); font-size: var(--t-sm); margin: 0 0 var(--s-6); max-width: var(--measure); }
+
+/* Escolha entre duas opções fixas. Substitui um campo de texto onde escrever
+   "sim" gravava `false` em silêncio — e o campo em questão decide se as taxas
+   de bloco entram no bolo dos delegadores. */
+.choice { display: flex; gap: 0; }
+.choice__option {
+  appearance: none;
+  font-family: var(--f-body);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--c-steel);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--c-steel-deep);
+  cursor: pointer;
+}
+.choice__option + .choice__option { border-left: 0; }
+.choice__option[aria-pressed='true'] {
+  background: var(--c-ink);
+  border-color: var(--c-ink);
+  color: var(--c-paper);
+}
+
+/* Confirmação dentro da janela. `window.confirm` é o diálogo do sistema no
+   meio de uma jornada que tem cartão, régua e ângulo próprios — e ele não
+   respeita nem o vocabulário nem o foco desta interface. */
+.confirm {
+  background: var(--c-surface);
+  border: 1px solid var(--c-ink);
+  border-left: 8px solid var(--c-attention);
+  padding: var(--s-6);
+  margin-bottom: var(--s-4);
+}
+.confirm__what {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: var(--t-md);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--s-3);
+}
+
+/* Abaixo de 68rem a barra vira faixa. Sem isto o rail de 15rem é fixo, e a
+   tabela de ciclos empurra a página 322px para fora da janela a 720px de
+   largura — a janela de um Tauri é redimensionável e ninguém prometeu 1440. */
+@media (max-width: 68rem) {
+  .shell { grid-template-columns: 1fr; }
+  .rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-4);
+  }
+  .rail__mark, .rail__tag { margin-bottom: 0; }
+  .rail__link { border-left: 0; border-bottom: 3px solid transparent; }
+  .rail__link[aria-current='page'] { border-left-color: transparent; border-bottom-color: var(--c-gold); }
+  .rail__foot { margin-top: 0; width: 100%; }
+  .page { padding: var(--s-6) var(--s-4); }
+}
+
+/* O motivo de uma linha da trilha. Segunda linha da célula, não um `title`. */
+.trail__detail {
+  display: block;
+  font-family: var(--f-body);
+  font-size: var(--t-xs);
+  color: var(--c-steel-deep);
+  margin-top: var(--s-1);
+  max-width: 40ch;
+}
+
+/* Cabeçalho do relatório: o número do ciclo e o estado dele lado a lado, e
+   não como mais uma linha de par entre outras cinco. */
+.report__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+.report__head .card__title { margin: 0; }
+
+/* A hora da leitura fica embaixo do valor, não colada nele. */
+/* Rodapé de cartão: a hora da leitura, separada do dado que ela carimba. */
+.card__foot { margin: var(--s-4) 0 0; padding-top: var(--s-3); border-top: 1px solid var(--c-hairline); }
+
+/* Um bloco que não deve esticar até a borda da janela. */
+.measure { max-width: var(--measure); }

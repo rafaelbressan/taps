@@ -214,7 +214,7 @@ export function App() {
 
   return (
     <div className="shell">
-      <nav className="rail">
+      <nav className="rail t-dark">
         <div className="rail__mark">TAPS</div>
         <div className="rail__tag">pagar</div>
         {TABS.map((entry) => (

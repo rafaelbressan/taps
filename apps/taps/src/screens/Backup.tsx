@@ -27,10 +27,19 @@ import { Fault } from '../ui/Fault';
  * 2. A restauração **confere antes** de sobrescrever, e o banco substituído é
  *    renomeado, nunca apagado.
  */
+/** O backup conferido e ainda não aplicado, esperando a palavra do baker. */
+interface Pending {
+  readonly token: string;
+  readonly name: string;
+  readonly cycles: number;
+  readonly version: number;
+}
+
 export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
 
   async function takeBackup() {
     setError(null);
@@ -86,16 +95,29 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
       );
       const cycles = rows[0] ? Number(rows[0].n) : 0;
 
-      const confirmed = window.confirm(
-        `${chosen.name} tem ${cycles} ciclo(s) e está na versão de schema ${version}.\n\n` +
-          'Restaurar substitui o banco atual. O banco de agora não é apagado: ele é ' +
-          'renomeado ao lado, e você pode voltar atrás.\n\nRestaurar?',
+      // A confirmação é da janela, não do sistema. `window.confirm` bloqueia a
+      // webview inteira, não respeita `prefers-reduced-motion`, não recebe o
+      // anel de foco desta interface e fala com o vocabulário do sistema
+      // operacional no meio de uma jornada que tem o seu próprio.
+      setPending({ token: chosen.token, name: chosen.name, cycles, version });
+    } catch (caught) {
+      setError(
+        caught instanceof BackupError
+          ? caught.message
+          : `Não restaurei nada. ${describe(caught)}`,
       );
-      if (!confirmed) return;
+    } finally {
+      setBusy(false);
+    }
+  }
 
+  async function applyRestore(confirmed: Pending) {
+    setPending(null);
+    setBusy(true);
+    try {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const result = await invoke<{ replaced_copied_to: string }>('restore_backup', {
-        token: chosen.token,
+        token: confirmed.token,
         stamp,
       });
       setMessage(
@@ -125,9 +147,50 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
       {error && <Fault what="Não deu certo" where="backup" cost={error} />}
       {message && <p className="note">{message}</p>}
 
+      {pending && (
+        <section className="confirm" role="alertdialog" aria-labelledby="confirm-restore">
+          <h2 className="confirm__what" id="confirm-restore">
+            Restaurar substitui o banco de agora
+          </h2>
+          <div className="pair">
+            <span className="pair__key">Arquivo</span>
+            <span className="pair__value">{pending.name}</span>
+          </div>
+          <div className="pair">
+            <span className="pair__key">Ciclos no arquivo</span>
+            <span className="pair__value">{pending.cycles}</span>
+          </div>
+          <div className="pair">
+            <span className="pair__key">Versão do schema</span>
+            <span className="pair__value">{pending.version}</span>
+          </div>
+          <p className="note" style={{ marginTop: 'var(--s-4)' }}>
+            O banco de agora não é apagado: ele é renomeado ao lado, e você pode voltar
+            atrás.
+          </p>
+          <div className="row" style={{ marginTop: 'var(--s-4)' }}>
+            <button
+              type="button"
+              className="t-button"
+              disabled={busy}
+              onClick={() => void applyRestore(pending)}
+            >
+              Restaurar
+            </button>
+            <button
+              type="button"
+              className="t-button t-button--quiet"
+              onClick={() => setPending(null)}
+            >
+              Cancelar
+            </button>
+          </div>
+        </section>
+      )}
+
       <div className="grid" style={{ marginTop: 'var(--s-6)' }}>
         <section className="t-card">
-          <h2 className="pair__key">Salvar uma cópia</h2>
+          <h2 className="card__title">Salvar uma cópia</h2>
           <p className="note">
             Pode fazer com o TAPS aberto. A cópia sai inteira, mesmo no meio de um ciclo.
           </p>
@@ -139,7 +202,7 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
         </section>
 
         <section className="t-card">
-          <h2 className="pair__key">Restaurar de uma cópia</h2>
+          <h2 className="card__title">Restaurar de uma cópia</h2>
           <p className="note">
             O arquivo é conferido antes de qualquer coisa ser trocada. O banco de agora é
             renomeado ao lado, nunca apagado.
@@ -157,7 +220,7 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
         </section>
 
         <section className="t-card">
-          <h2 className="pair__key">O que NÃO está no backup</h2>
+          <h2 className="card__title">O que NÃO está no backup</h2>
           <p className="note">
             A credencial de cliente do <code>octez-signer</code> fica no cofre do sistema
             operacional, não no banco. Restaurar noutra máquina exige cadastrá-la de novo — e
