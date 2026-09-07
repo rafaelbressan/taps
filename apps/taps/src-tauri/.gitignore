@@ -1,0 +1,4 @@
+# Build do Cargo.
+/target/
+# `tauri android init` regenera isto a partir de tauri.conf.json.
+/gen/

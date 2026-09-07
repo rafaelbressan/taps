@@ -11,6 +11,7 @@ export * from './guard';
 export * from './minimum';
 export * from './queue';
 export * from './report';
+export * from './scheduler';
 export * from './schedule';
 export * from './store/file';
 export * from './store/memory';

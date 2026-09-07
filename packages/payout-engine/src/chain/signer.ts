@@ -41,14 +41,23 @@ export interface SignerConfig {
   readonly publicKeyHash: string;
   /**
    * The CLIENT credential, base58 `edsk…`, for a signer started with
-   * `--require-authentication`. It is NOT the key that holds the funds and
-   * moves no money on its own.
+   * `--require-authentication`.
    *
-   * Required. `--require-authentication` is a mainnet prerequisite, so a
-   * payout host with no client credential is misconfigured, not degraded —
-   * it stops at boot rather than at the first payout.
+   * Read this before assuming it is harmless: it does not hold the funds, but
+   * it **is** spending capability. With `--magic-bytes 0x03` the signer still
+   * signs a transfer for whoever presents a valid authentication, and the
+   * checks that bound the damage — destination verified against the locally
+   * computed delegator list, per-cycle cap, idempotency — all run inside the
+   * caller. They do not reach whoever talks to the signer directly.
+   *
+   * Optional **here**, and required by `loadSignerConfig`. The distinction is
+   * the whole point: a process that reads its credential from the environment
+   * has no business starting without one, while a caller that supplies its own
+   * `SignerAuthenticator` may hold no credential at all. The desktop app is
+   * that caller — its credential lives behind the Rust boundary and the
+   * signature comes back already made (BRES-48).
    */
-  readonly clientAuthKey: string;
+  readonly clientAuthKey?: string;
 }
 
 const SIGNER_URL_ENV = 'TAPS_SIGNER_URL';
@@ -97,13 +106,26 @@ export function assertSignerUrlAllowed(url: string): URL {
 }
 
 /**
+ * A configuração vinda do ambiente, com a credencial **garantida**.
+ *
+ * `SignerConfig.clientAuthKey` é opcional porque quem traz o próprio
+ * `SignerAuthenticator` pode não ter credencial nenhuma deste lado — é o caso
+ * do aplicativo desktop, onde ela vive atrás da fronteira Rust. Um processo
+ * que lê do ambiente não tem essa desculpa, e o tipo diz isso em vez de deixar
+ * o chamador conferir.
+ */
+export interface EnvSignerConfig extends SignerConfig {
+  readonly clientAuthKey: string;
+}
+
+/**
  * Reads the signer endpoint from the environment.
  *
  * All three variables are required and none has a default. A missing one
  * stops the process: the alternative is a payout host that boots, finds no
  * signer, and reaches for something else.
  */
-export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
+export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): EnvSignerConfig {
   const url = requireEnv(
     env,
     SIGNER_URL_ENV,

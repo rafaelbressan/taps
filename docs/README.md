@@ -18,7 +18,9 @@ A regra, escrita para não se perder: **código pode viver em branch enquanto a 
 | Diretório | O que é |
 |---|---|
 | [`../packages/tezos-chain/`](../packages/tezos-chain/) | `@tezos-suite/chain` — a camada de cadeia da suíte, compartilhada com o Tezzet. Especificada em SPEC-0002. Não importa nada do TAPS: extrair para repositório próprio é um `git mv` |
-| [`../packages/payout-engine/`](../packages/payout-engine/) | `@tezos-suite/payout` — o motor de payout (BRES-46). Idempotência por desenho: o hash existe antes da operação, nada é reenviado sem ler o estado do hash anterior na cadeia, e o banco impede a segunda distribuição do mesmo ciclo |
+| [`../packages/payout-engine/`](../packages/payout-engine/) | `@tezos-suite/payout` — o motor de payout (BRES-46). Idempotência por desenho: o hash existe antes da operação, nada é reenviado sem ler o estado do hash anterior na cadeia, e o banco impede a segunda distribuição do mesmo ciclo. Traz também o **agendador embutido** (BRES-48), que substitui Redis + Bull |
+| [`../packages/payout-store-sqlite/`](../packages/payout-store-sqlite/) | `@tezos-suite/payout-store-sqlite` — o `PayoutStore` em SQLite, com migrations versionadas, backup verificável e a importação do banco da versão antiga. Os 40 testes de contrato rodam contra ele **e** contra a implementação de memória: um comportamento que só uma das duas tem é um comportamento que o baker não recebe |
+| [`../apps/taps/`](../apps/taps/) | O aplicativo desktop local-first (BRES-48). Sem servidor, sem login, sem porta aberta |
 | `../backend/` | O backend NestJS herdado. Não compila, e a reescrita passa por cima dele (ADR-0001 §6). A camada de cadeia dele é substituída pelo pacote acima |
 
 ## Documentos de suíte
@@ -37,8 +39,12 @@ O que a SPEC-0001 decide especificamente para o TAPS está resumido em [`spec/RE
 
 | Documento | O que é |
 |---|---|
-| [`deployment/DEPLOYMENT_RUNBOOK.md`](deployment/DEPLOYMENT_RUNBOOK.md) | Runbook de deploy do sistema atual |
-| [`deployment/TROUBLESHOOTING.md`](deployment/TROUBLESHOOTING.md) | Diagnóstico do sistema atual |
+| [`deployment/INSTALACAO.md`](deployment/INSTALACAO.md) | **Instalar o TAPS**, escrito para um baker. É por aqui que se começa |
+| [`deployment/OCTEZ-SIGNER.md`](deployment/OCTEZ-SIGNER.md) | Runbook do `octez-signer`: instalar, atualizar, monitorar e **destravar depois de todo reinício** |
+| [`deployment/MIGRACAO-DA-VERSAO-ANTIGA.md`](deployment/MIGRACAO-DA-VERSAO-ANTIGA.md) | Vir do TAPS em Lucee: o que atravessa, o que fica para trás e por quê |
+| [`deployment/BACKUP-E-RESTAURACAO.md`](deployment/BACKUP-E-RESTAURACAO.md) | Um arquivo, um botão, e o caminho de volta quando se escolhe o arquivo errado |
 | [`deployment/BAKINGNET-PAYOUT-VALIDATION.md`](deployment/BAKINGNET-PAYOUT-VALIDATION.md) | O combinado para fechar o payout em Bakingnet: como subir o `octez-signer` (metade do Rafael) e como rodar o harness contra o motor de produção |
+| [`deployment/DEPLOYMENT_RUNBOOK.md`](deployment/DEPLOYMENT_RUNBOOK.md) | **Histórico.** Deploy do sistema de nuvem que a ADR-0001 §4 substituiu |
+| [`deployment/TROUBLESHOOTING.md`](deployment/TROUBLESHOOTING.md) | **Histórico.** Diagnóstico daquele mesmo sistema |
 
-Os dois descrevem o TAPS como serviço de nuvem. A ADR-0001 §4 recomenda **local-first**; quando isso for decidido, estes dois documentos são reescritos.
+Os dois últimos descrevem o TAPS como serviço de nuvem, com Postgres, Redis e ECS. A decisão local-first foi tomada e implementada em BRES-48; eles ficam como registro do que existia, não como instrução.

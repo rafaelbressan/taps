@@ -1,0 +1,130 @@
+/* O sistema de desenho da suíte, sem uma segunda cópia.
+   Todo valor visual — cor, espaço, tipo, movimento — vem daqui. */
+@import '../../vendor/suite/tokens/tokens.css';
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--f-body);
+  font-size: var(--t-base);
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 15rem 1fr;
+  min-height: 100vh;
+}
+
+.rail {
+  background: var(--c-ink);
+  color: var(--c-paper-dim);
+  padding: var(--s-6) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.rail__mark {
+  font-family: var(--f-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  font-size: var(--t-lg);
+  color: var(--c-gold);
+  margin-bottom: var(--s-4);
+}
+
+.rail__tag {
+  font-family: var(--f-data);
+  font-size: var(--t-xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--c-steel-faint);
+  margin-bottom: var(--s-6);
+}
+
+.rail__link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: var(--radius);
+  color: var(--c-paper-dim);
+  font-family: var(--f-body);
+  font-size: var(--t-sm);
+  text-align: left;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+}
+
+.rail__link[aria-current='page'] {
+  border-left-color: var(--c-gold);
+  color: var(--c-surface);
+  font-weight: 600;
+}
+
+.rail__foot {
+  margin-top: auto;
+  font-family: var(--f-data);
+  font-size: var(--t-xs);
+  color: var(--c-steel-faint);
+  word-break: break-all;
+}
+
+.page {
+  padding: var(--s-8);
+  max-width: var(--shell);
+}
+
+.page__title {
+  font-family: var(--f-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  font-size: var(--t-xl);
+  margin: 0 0 var(--s-2);
+}
+
+.page__lede {
+  color: var(--c-steel-deep);
+  max-width: var(--measure);
+  margin: 0 0 var(--s-6);
+}
+
+.stack { display: flex; flex-direction: column; gap: var(--s-4); }
+.row { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: flex-end; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: var(--s-4);
+}
+
+.pair { display: flex; justify-content: space-between; gap: var(--s-4); padding: var(--s-2) 0; }
+.pair + .pair { border-top: 1px solid var(--c-hairline); }
+.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); }
+.pair__value { font-family: var(--f-data); text-align: right; }
+
+.table { width: 100%; border-collapse: collapse; }
+.table th {
+  text-align: left;
+  font-family: var(--f-body);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--c-steel-deep);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-ink);
+}
+.table td {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-hairline);
+  font-family: var(--f-data);
+  font-variant-numeric: tabular-nums;
+}
+.table td.num, .table th.num { text-align: right; }
+
+.note { font-size: var(--t-sm); color: var(--c-steel-deep); max-width: var(--measure); }

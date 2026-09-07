@@ -1,0 +1,131 @@
+name: TAPS desktop
+
+on:
+  push:
+    paths:
+      - 'apps/taps/**'
+      - 'packages/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'apps/taps/**'
+      - 'packages/**'
+      - '.github/workflows/desktop.yml'
+
+jobs:
+  store:
+    name: SQLite store
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # `node:sqlite` só existe a partir do Node 22.
+          node-version: '22.x'
+
+      - name: Install the chain layer
+        working-directory: packages/tezos-chain
+        run: npm ci
+      - name: Install the payout engine
+        working-directory: packages/payout-engine
+        run: npm ci
+      - name: Install the store
+        working-directory: packages/payout-store-sqlite
+        run: npm ci
+
+      # Os 40 testes de contrato rodam contra as DUAS implementações do port —
+      # a de memória e a de SQLite. Um comportamento que só a de memória tem é
+      # um comportamento que o baker não recebe.
+      - name: Verify
+        working-directory: packages/payout-store-sqlite
+        run: npm run verify
+
+  app:
+    name: App (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            bundles: deb,appimage
+          - os: windows-latest
+            bundles: nsis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/taps/src-tauri -> target
+
+      # O Tauri no Linux precisa da webview do sistema. No Windows a WebView2
+      # já vem com o sistema operacional.
+      - name: Dependências do sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev
+          # O cofre de credenciais é onde a credencial de cliente do signer
+          # mora. Sem ele o build passa e o aplicativo não abre.
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      # Os três pacotes da suíte entram no bundle como FONTE, por alias do
+      # Vite — e o `tsc` do app typecheca essa fonte junto. Ela importa
+      # `@taquito/*`, `blakejs` e `@stablelib/ed25519`, que moram no
+      # `node_modules` de cada pacote. Sem estes três `npm ci` o typecheck do
+      # app quebra com "Cannot find module", e o erro aponta para um arquivo
+      # que não é dele.
+      - name: Install the chain layer
+        working-directory: packages/tezos-chain
+        run: npm ci
+      - name: Install the payout engine
+        working-directory: packages/payout-engine
+        run: npm ci
+      - name: Install the store
+        working-directory: packages/payout-store-sqlite
+        run: npm ci
+
+      - name: Install
+        working-directory: apps/taps
+        run: npm ci
+
+      # Portão de desenho, tipos, testes, build e portão de bundle. O último
+      # roda depois do build e reprova um `node:` que tenha sobrado no pacote
+      # da webview — coisa que teste de unidade nenhum vê.
+      #
+      # `test/fronteira.test.ts` está aí dentro: é o portão que impede a
+      # credencial do signer, um destino de rede ou um caminho de arquivo
+      # voltarem a atravessar para a janela (BRES-48).
+      - name: Verify
+        working-directory: apps/taps
+        run: npm run verify
+
+      # O lado Rust é onde a credencial vive e onde a assinatura de
+      # autenticação acontece. O vetor capturado de um `octez-signer` de
+      # verdade está entre estes testes, e é o mesmo que fixa a implementação
+      # TypeScript — as duas produzem os mesmos bytes, ou uma delas falha aqui.
+      - name: Rust
+        working-directory: apps/taps/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Bundle
+        working-directory: apps/taps
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taps-${{ matrix.os }}
+          path: |
+            apps/taps/src-tauri/target/release/bundle/**/*.deb
+            apps/taps/src-tauri/target/release/bundle/**/*.AppImage
+            apps/taps/src-tauri/target/release/bundle/**/*.exe
+          if-no-files-found: error

@@ -1,0 +1,46 @@
+[package]
+name = "taps"
+version = "0.1.0"
+description = "TAPS — distribuição de recompensas para bakers Tezos. Aplicativo local-first: sem servidor, sem login, sem superfície HTTP pública."
+authors = ["Tezos.Rio"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# O sufixo `_lib` evita colisão com o nome do binário no Windows.
+# Ver https://github.com/rust-lang/cargo/issues/8519
+name = "taps_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# A chave que assina o payout vive no host do `octez-signer` e nunca chega a
+# este processo (SPEC-0001 §11). O que fica aqui é a credencial de CLIENTE, no
+# cofre do sistema operacional, e a assinatura de autenticação do pedido.
+#
+# Ela é feita neste processo por prescrição do Tezos Core & Crypto (BRES-48):
+# a alternativa era entregar a credencial à webview, que tem HTTP para fora e
+# não é fronteira nenhuma. O layout dos bytes — a parte difícil, revisada em
+# BRES-74 — continua no `@tezos-suite/payout`; aqui só se compõem primitivas
+# das crates que a SPEC-0001 §5 nomeia, e o vetor capturado de um
+# `octez-signer` de verdade é o teste (`src/tezos.rs`).
+#
+# Versões exatas: numa biblioteca que assina, uma faixa aberta é uma troca de
+# implementação que ninguém revisou.
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ed25519-dalek = "=2.2.0"
+blake2 = "=0.10.6"
+bs58 = { version = "=0.5.1", features = ["check"] }
+zeroize = "=1.8.2"
+url = "=2.5.7"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["time"] }

@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "O mínimo que a janela do TAPS precisa, e nada além. O diálogo de arquivo NÃO está aqui de propósito: ele é aberto pelo lado Rust, que guarda o caminho e devolve um token — com a permissão do plugin, a tela voltaria a poder escolher arquivo. Rede também não: a CSP é connect-src 'self', e toda chamada sai por comando próprio, contra os dois endereços que estão na configuração.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:allow-open-url"
+  ]
+}
