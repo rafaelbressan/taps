@@ -40,6 +40,8 @@ interface Fixture {
   readonly schemaVersion?: number;
   /** `null` quando o diálogo é cancelado. */
   readonly picked?: { token: string; name: string } | null;
+  /** O arquivo nem abre — é o que o SQLite responde a um `.txt`. */
+  readonly unreadable?: string;
 }
 
 function arrange(fixture: Fixture = {}) {
@@ -48,6 +50,7 @@ function arrange(fixture: Fixture = {}) {
     schemaVersion = newestKnownSchemaVersion(),
     picked = { token: 'tok-1', name: 'taps-2026-08-30.db' },
     backupCycles = rows([{ n: int(4), newest: int(808) }]),
+    unreadable,
   } = fixture;
 
   invoke.mockReset();
@@ -56,6 +59,8 @@ function arrange(fixture: Fixture = {}) {
       case 'pick_file':
         return picked;
       case 'inspect_database': {
+        // O Rust devolve a recusa do SQLite como texto, não como Error.
+        if (unreadable) throw unreadable;
         const sql = String(args.sql);
         if (sql.includes('integrity_check')) {
           return rows([{ integrity_check: { t: 's', v: integrity } }]);
@@ -163,6 +168,17 @@ describe('um arquivo recusado não chega a perguntar', () => {
     const falha = await screen.findByRole('alert');
     expect(falha.textContent).toContain('corrompido');
     expect(screen.queryByRole('button', { name: 'Restaurar' })).toBeNull();
+    expect(calls('restore_backup')).toHaveLength(0);
+  });
+
+  it('um `.txt` é recusado em português, não com a frase do SQLite', async () => {
+    // BRES-124: a QA viu "file is not a database" cru na tela. O arquivo nem
+    // chega a abrir, então `judgeBackup` nunca roda — a tradução é outra.
+    mount({ unreadable: 'file is not a database' });
+
+    const falha = await screen.findByRole('alert');
+    expect(falha.textContent).toContain('não é um banco de dados');
+    expect(falha.textContent).not.toContain('file is not a database');
     expect(calls('restore_backup')).toHaveLength(0);
   });
 
