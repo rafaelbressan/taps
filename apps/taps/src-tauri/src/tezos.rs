@@ -121,18 +121,37 @@ pub fn sign_authentication(seed: &[u8; SEED_LEN], payload: &[u8]) -> String {
     b58check_encode(&PREFIX_ED25519_SIGNATURE, &signature.to_bytes())
 }
 
+/// Hexadecimal para bytes, sobre **bytes**, nunca sobre índice de `str`.
+///
+/// A primeira versão fatiava com `&text[i..i + 2]`, e `str` indexa por byte:
+/// uma entrada não-ASCII de tamanho par entrava em panic com
+/// `not a char boundary` — `hex_decode("aéa")` derrubava o processo. E a
+/// entrada vem da janela, por `signer_authenticate`.
+///
+/// Não era vazamento: a credencial nem chega a ser lida. Era queda, e uma
+/// queda é um payout que não acontece. Achado do Tezos Core & Crypto em
+/// BRES-48, registrado em BRES-95.
+///
+/// Percorrer os bytes fecha a classe inteira em vez do caso: qualquer byte que
+/// não seja dígito hexadecimal vira erro — inclusive um byte de continuação de
+/// UTF-8, que é o que estava causando o panic.
 pub fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
-    let text = value.strip_prefix("0x").unwrap_or(value);
+    let text = value.strip_prefix("0x").unwrap_or(value).as_bytes();
     if text.len() % 2 != 0 {
         return Err("hexadecimal com número ímpar de dígitos".to_string());
     }
-    (0..text.len())
-        .step_by(2)
-        .map(|index| {
-            u8::from_str_radix(&text[index..index + 2], 16)
-                .map_err(|_| "hexadecimal inválido".to_string())
-        })
+    text.chunks_exact(2)
+        .map(|pair| Ok(hex_digit(pair[0])? * 16 + hex_digit(pair[1])?))
         .collect()
+}
+
+fn hex_digit(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err("hexadecimal inválido".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +196,26 @@ mod tests {
         // Ida e volta: o edpk decodifica para 32 bytes sob o prefixo certo.
         let (body, _) = b58check_decode(&edpk, &[&PREFIX_ED25519_PUBLIC_KEY]).expect("edpk");
         assert_eq!(body.len(), 32);
+    }
+
+    #[test]
+    fn hex_recusa_em_vez_de_derrubar_o_processo() {
+        // O reproduzido pelo Tezos Core & Crypto: tamanho PAR em bytes, e o
+        // segundo byte cai no meio de um caractere. A versão que fatiava `str`
+        // por índice entrava em panic aqui.
+        assert!(hex_decode("aéa").is_err());
+        assert!(hex_decode("é").is_err());
+        assert!(hex_decode("🙂").is_err());
+        // E o resto da classe, que a mesma correção fecha.
+        assert!(hex_decode("zz").is_err());
+        assert!(hex_decode("0f0").is_err());
+        assert_eq!(hex_decode("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn hex_le_o_que_e_hexadecimal() {
+        assert_eq!(hex_decode("00ff10").unwrap(), vec![0x00, 0xff, 0x10]);
+        assert_eq!(hex_decode("0xAbCd").unwrap(), vec![0xab, 0xcd]);
     }
 
     #[test]
