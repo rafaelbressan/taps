@@ -458,6 +458,10 @@ fn describe_keyring(error: keyring::Error) -> String {
 }
 
 #[cfg(test)]
+#[path = "signer_tls_live.rs"]
+mod tls_live;
+
+#[cfg(test)]
 mod tests {
     use super::{collect_edsk_candidates, fingerprint, parse_certificate};
 

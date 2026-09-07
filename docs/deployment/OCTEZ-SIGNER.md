@@ -250,6 +250,48 @@ tenha rodado, alguém está com a credencial de cliente.
 
 ---
 
+## Trocar o certificado sem mexer na chave
+
+Você vai precisar disto pelo menos uma vez por ano, quando o certificado
+vencer, e também se mudar o endereço do signer. **A chave de pagamento não é
+tocada** — ela continua no volume, cifrada, com a mesma senha.
+
+No host do signer:
+
+```bash
+cd ~/taps-signer
+
+# 1. Certificado novo. Mesmo comando do passo 3 — inclusive o CA:FALSE.
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout tls.key.novo -out tls.crt.novo \
+  -subj "/CN=taps-signer" \
+  -addext "subjectAltName=IP:192.168.1.20,DNS:taps-signer" \
+  -addext "basicConstraints=critical,CA:FALSE"
+
+# 2. Anote a impressão digital — é ela que você vai conferir no TAPS.
+openssl x509 -noout -fingerprint -sha256 -in tls.crt.novo
+
+# 3. Troque os arquivos e suba o daemon de novo.
+mv tls.crt.novo tls.crt && mv tls.key.novo tls.key
+docker rm -f taps-signer
+docker start -ai taps-signer   # ou o `docker run` do passo 4, se você o removeu
+```
+
+**O daemon vai pedir a senha da chave outra vez**, como em qualquer reinício —
+trocar o certificado não é exceção. Deixe o `tmux` aberto.
+
+Depois, na máquina do TAPS: **Configuração → Escolher o certificado do signer**,
+aponte para o `tls.crt` novo e confira o SHA-256 contra o que você anotou no
+passo 2.
+
+Entre a troca no host e a reimportação no TAPS, o TAPS recusa a conexão dizendo
+que *"o certificado que o signer apresentou não é o que está importado aqui"*.
+Isso é o comportamento certo, não uma falha: nesse intervalo ele realmente não
+sabe se está falando com o seu signer. Nenhum pagamento se perde — a fila
+espera e tenta de novo.
+
+---
+
 ## Atualizar
 
 O signer é um daemon de segurança: vale atualizar quando sair versão nova do

@@ -52,3 +52,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 sha2 = "=0.10.9"
 base64 = "=0.22.1"
 tokio = { version = "1", features = ["time"] }
+
+# Só o teste ao vivo do TLS (`signer_tls_live`) precisa de runtime: o resto do
+# `signer.rs` é testado sem rede. O `tokio` da dependência normal traz só
+# `time`, para o tique do agendador.
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
