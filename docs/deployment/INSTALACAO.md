@@ -44,25 +44,48 @@ coisas anotadas:
 
 ## Passo 2 — Instale o TAPS
 
+### Onde baixar
+
+Ainda **não existe release publicada**. Os instaladores saem da integração
+contínua do projeto:
+
+1. Abra <https://github.com/rafaelbressan/taps/actions/workflows/desktop.yml>.
+2. Clique na execução verde mais recente do ramo `master`.
+3. Em **Artifacts**, baixe `taps-ubuntu-22.04` (Linux) ou `taps-windows-latest`
+   (Windows). Os dois vêm em `.zip`; descompacte antes de instalar.
+
+Nenhum dos instaladores é assinado. O Windows mostra o aviso do SmartScreen na
+primeira execução — é esperado, e some quando houver certificado.
+
 ### Windows
 
-Baixe o instalador `TAPS_0.1.0_x64-setup.exe`, execute e siga o assistente.
+Dentro do `.zip`, o instalador é `TAPS_0.1.0_x64-setup.exe`. Execute e siga o
+assistente. Ele instala para o seu usuário, em `%LOCALAPPDATA%\TAPS`, e não pede
+privilégio de administrador.
 
 ### Linux (Debian, Ubuntu)
 
-Baixe `taps_0.1.0_amd64.deb` e instale:
+O pacote está em `deb/TAPS_0.1.0_amd64.deb` — repare no nome em **maiúsculas**.
+Instale com:
 
 ```
-sudo apt install ./taps_0.1.0_amd64.deb
+sudo apt install ./TAPS_0.1.0_amd64.deb
 ```
+
+O `apt` resolve sozinho as duas dependências (`libwebkit2gtk-4.1-0` e
+`libgtk-3-0`). Para remover depois: `sudo apt remove taps`.
+
+Precisa de Debian 12 ou Ubuntu 22.04 para cima — versões mais antigas trazem o
+webkit 4.0 e o pacote não instala.
 
 ### Linux (outras distribuições)
 
-Baixe `taps_0.1.0_amd64.AppImage`, dê permissão de execução e abra:
+O AppImage está em `appimage/TAPS_0.1.0_amd64.AppImage`. Dê permissão de
+execução e abra — não instala nada:
 
 ```
-chmod +x taps_0.1.0_amd64.AppImage
-./taps_0.1.0_amd64.AppImage
+chmod +x TAPS_0.1.0_amd64.AppImage
+./TAPS_0.1.0_amd64.AppImage
 ```
 
 No Linux o TAPS guarda a credencial do signer no **cofre de credenciais da sua
