@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { pickFile, pickSavePath } from '../lib/pick';
 import {
   BackupError,
   INTEGRITY_CHECK,
   SCHEMA_VERSION_QUERY,
-  backupInto,
   judgeBackup,
 } from '@tezos-suite/payout-store-sqlite';
 import type { Ready } from '../App';
@@ -37,15 +36,20 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
     setError(null);
     setMessage(null);
     const suggested = `taps-${new Date().toISOString().slice(0, 10)}.db`;
-    const chosen = await save({ defaultPath: suggested, title: 'Onde salvar o backup' });
-    if (typeof chosen !== 'string') return;
+    const chosen = await pickSavePath('backup-destination', 'Onde salvar o backup', suggested);
+    if (!chosen) return;
 
     setBusy(true);
     try {
-      // Pelo mesmo `backupInto` do pacote, contra a conexão do Rust. Uma
-      // implementação só, testada uma vez.
-      await backupInto(ready.db, chosen);
-      setMessage(`Backup salvo em ${chosen}. Guarde-o fora deste computador.`);
+      // `VACUUM INTO` do lado do Rust, contra o caminho que o diálogo guardou.
+      // A tela não sabe onde o arquivo fica, e por isso não pode escolher.
+      const summary = await invoke<{ name: string; bytes: number }>('backup_into', {
+        token: chosen.token,
+      });
+      setMessage(
+        `Backup salvo como ${summary.name} (${Math.round(summary.bytes / 1024)} kB). ` +
+          'Guarde-o fora deste computador.',
+      );
     } catch (caught) {
       setError(describe(caught));
     } finally {
@@ -56,36 +60,34 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
   async function restore() {
     setError(null);
     setMessage(null);
-    const chosen = await open({
-      multiple: false,
-      directory: false,
-      title: 'Qual backup restaurar',
-    });
-    if (typeof chosen !== 'string') return;
+    const chosen = await pickFile('backup-to-restore', 'Qual backup restaurar');
+    if (!chosen) return;
 
     setBusy(true);
     try {
       // Confere ANTES de trocar. As mesmas duas consultas do pacote, e o mesmo
       // julgamento: um arquivo corrompido, que não é do TAPS, ou escrito por
       // uma versão mais nova é recusado com o motivo, e o banco atual fica como
-      // estava.
-      const integrity = await queryOtherDatabase(chosen, INTEGRITY_CHECK);
+      // estava. Conferir não gasta o token — restaurar vem logo depois.
+      const integrity = await queryOtherDatabase(chosen.token, INTEGRITY_CHECK);
       const verdict = integrity[0] ? String(integrity[0].integrity_check) : 'sem resposta';
-      const applied = await queryOtherDatabase(chosen, SCHEMA_VERSION_QUERY).catch(() => []);
+      const applied = await queryOtherDatabase(chosen.token, SCHEMA_VERSION_QUERY).catch(
+        () => [],
+      );
       const version = judgeBackup({
-        path: chosen,
+        path: chosen.name,
         integrity: verdict,
         appliedVersions: applied.map((row) => Number(row.version)),
       });
 
       const rows = await queryOtherDatabase(
-        chosen,
+        chosen.token,
         'SELECT COUNT(*) AS n FROM distributions',
       );
       const cycles = rows[0] ? Number(rows[0].n) : 0;
 
       const confirmed = window.confirm(
-        `Este backup tem ${cycles} ciclo(s) e está na versão de schema ${version}.\n\n` +
+        `${chosen.name} tem ${cycles} ciclo(s) e está na versão de schema ${version}.\n\n` +
           'Restaurar substitui o banco atual. O banco de agora não é apagado: ele é ' +
           'renomeado ao lado, e você pode voltar atrás.\n\nRestaurar?',
       );
@@ -93,7 +95,7 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
 
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const result = await invoke<{ replaced_copied_to: string }>('restore_backup', {
-        path: chosen,
+        token: chosen.token,
         stamp,
       });
       setMessage(

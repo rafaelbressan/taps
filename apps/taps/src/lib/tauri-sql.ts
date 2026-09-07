@@ -127,8 +127,13 @@ export class TauriSqlDatabase implements SqlDatabase {
   }
 }
 
-/** Abre outro arquivo só para leitura, para conferir um backup antes de restaurar. */
-export async function queryOtherDatabase(path: string, sql: string): Promise<SqlRow[]> {
-  const rows = await invoke<[string, Bridged][][]>('inspect_database', { path, sql });
+/**
+ * Abre o candidato a backup só para leitura, para conferi-lo antes de restaurar.
+ *
+ * Recebe o **token** do diálogo, não um caminho: a janela não escolhe arquivo.
+ * O token não é consumido aqui — restaurar vem logo depois e usa o mesmo.
+ */
+export async function queryOtherDatabase(token: string, sql: string): Promise<SqlRow[]> {
+  const rows = await invoke<[string, Bridged][][]>('inspect_database', { token, sql });
   return rows.map(toRow);
 }

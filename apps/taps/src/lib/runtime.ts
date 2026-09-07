@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { RpcClient } from '@taquito/rpc';
 import { TezosToolkit } from '@taquito/taquito';
 import {
   TzKTHeadSource,
@@ -13,21 +14,23 @@ import {
 } from '@tezos-suite/chain';
 import {
   CycleQueue,
-  Ed25519ClientAuthenticator,
   HttpPayoutRpc,
   OctezRemoteSigner,
   PayoutEngine,
   PayoutScheduler,
   RpcBatchInjector,
   TzKTOperationStateSource,
+  buildAuthenticationPayload,
   createChunkedEstimator,
   payoutFactor,
   type EstimateTransfers,
   type QueueRequest,
-  type SignerConfig,
+  type SignerAuthenticator,
+  type SignerRequest,
   type SignerTransport,
 } from '@tezos-suite/payout';
 import { SqlitePayoutStore, migrate } from '@tezos-suite/payout-store-sqlite';
+import { TauriHttpBackend, chainFetch } from './chain-http';
 import { TauriSqlDatabase } from './tauri-sql';
 import type { TapsSettings } from './settings';
 
@@ -37,21 +40,45 @@ import type { TapsSettings } from './settings';
  * O motor é o do estágio 4, inteiro: `PayoutEngine`, `CycleQueue`, a aritmética
  * de `@tezos-suite/chain`, a idempotência do `SqlitePayoutStore`. Não há um
  * ramo de lógica de dinheiro só para desktop — o que este arquivo faz é ligar
- * as pontas ao ambiente: o SQL passa pelo Rust, o HTTP do signer passa pelo
- * Rust, e o tique do agendador vem de um `tokio::interval` em vez de um
- * `setInterval` que a webview estrangula com a janela escondida.
+ * as pontas ao ambiente.
+ *
+ * E o ambiente mudou depois da revisão do Tezos Core & Crypto em BRES-48. O
+ * que a webview **não** faz mais:
+ *
+ * - não segura a credencial do signer (ela assina pelo Rust, `signer_authenticate`);
+ * - não escolhe endereço de rede (o Rust lê da configuração e confere);
+ * - não abre conexão para fora (a CSP é `connect-src 'self'`);
+ * - não escolhe caminho de arquivo (o diálogo é do Rust, e volta um token).
+ *
+ * O que ela continua fazendo é o que faz sentido lá: a aritmética do dinheiro,
+ * a decisão de quem recebe, e o layout dos bytes de autenticação — que é a
+ * parte revisada em BRES-74 e que não há razão para reescrever em Rust.
  */
 
-/** `SignerTransport` pelo Rust: o certificado do signer é do baker, não da web. */
+/** `SignerTransport` pelo Rust. O endereço do signer não passa por aqui. */
 class TauriSignerTransport implements SignerTransport {
-  constructor(private readonly baseUrl: string) {}
-
   async send(method: 'GET' | 'POST', path: string, body?: string) {
     return invoke<{ status: number; body: string }>('signer_call', {
-      url: `${this.baseUrl}${path}`,
       method,
+      path,
       body: body ?? null,
     });
+  }
+}
+
+/**
+ * O autenticador do signer, com a credencial do outro lado da fronteira.
+ *
+ * O layout — `0x04 || tag || pkh || dados` — é montado aqui por
+ * `buildAuthenticationPayload`, que é o código revisado em BRES-74 e o que um
+ * teste com captura de `octez-signer` de verdade fixa. O que atravessa para o
+ * Rust é o payload já montado; o que volta é a assinatura. A credencial não
+ * aparece em nenhum dos dois sentidos.
+ */
+class TauriSignerAuthenticator implements SignerAuthenticator {
+  async authenticate(request: SignerRequest): Promise<string> {
+    const payloadHex = buildAuthenticationPayload(request).toString('hex');
+    return invoke<string>('signer_authenticate', { payloadHex });
   }
 }
 
@@ -67,15 +94,6 @@ export interface Runtime {
 
 export interface RuntimeOptions {
   readonly settings: TapsSettings;
-  /**
-   * A credencial de cliente do signer, vinda do cofre do sistema operacional.
-   *
-   * Ela prova ao signer QUEM está pedindo. Não é a chave que segura os fundos,
-   * não produz assinatura de transferência, e uma máquina que só tem ela não
-   * move nada. Fica em memória enquanto a janela viver e não vai para o banco
-   * nem para o backup.
-   */
-  readonly clientAuthKey: string;
   readonly schedulerPolicy: {
     readonly intervalMs: number;
     readonly backoffMs: number;
@@ -105,19 +123,21 @@ export async function buildRuntime(
     rpcUrl: settings.rpcUrl,
     tzktApiUrl: settings.tzktApiUrl,
   });
-  const tzkt = new TzKTHttp(network);
+  const tzkt = new TzKTHttp(network, { fetchImpl: chainFetch });
   const head = new TzKTHeadSource(tzkt);
-  const rpc = new HttpPayoutRpc(settings.rpcUrl);
+  const rpc = new HttpPayoutRpc(settings.rpcUrl, { fetchImpl: chainFetch });
 
-  const signerConfig: SignerConfig = {
-    url: settings.signerUrl,
-    publicKeyHash: settings.signerPublicKeyHash,
-    clientAuthKey: options.clientAuthKey,
-  };
+  // A configuração do signer que o motor precisa saber é o endereço de onde o
+  // dinheiro sai. O ENDEREÇO DO SIGNER e a credencial ficam do lado do Rust —
+  // por isso os dois campos abaixo são o que sobrou de `SignerConfig` aqui.
   const signer = new OctezRemoteSigner(
-    signerConfig,
-    new Ed25519ClientAuthenticator(options.clientAuthKey),
-    new TauriSignerTransport(settings.signerUrl.replace(/\/+$/, '')),
+    // Sem `clientAuthKey`: ela não existe deste lado da fronteira. O
+    // autenticador abaixo manda o payload para o Rust e recebe a assinatura
+    // pronta, e `SignerConfig` marca o campo como opcional exatamente para
+    // este caso.
+    { url: settings.signerUrl, publicKeyHash: settings.signerPublicKeyHash },
+    new TauriSignerAuthenticator(),
+    new TauriSignerTransport(),
   );
 
   // Lidas uma vez por sessão e guardadas: são constantes de protocolo, mudam em
@@ -126,7 +146,9 @@ export async function buildRuntime(
   let cached: ProtocolConstants | null = null;
   const constants = async (): Promise<ProtocolConstants> => {
     if (cached) return cached;
-    const raw = await fetch(`${settings.rpcUrl}/chains/main/blocks/head/context/constants`);
+    const raw = await chainFetch(
+      `${settings.rpcUrl}/chains/main/blocks/head/context/constants`,
+    );
     if (!raw.ok) {
       throw new Error(
         `o nó respondeu ${raw.status} ao pedido de constantes de protocolo — sem elas o ` +
@@ -134,7 +156,7 @@ export async function buildRuntime(
           'o erro estrutural do sistema antigo',
       );
     }
-    const header = await fetch(`${settings.rpcUrl}/chains/main/blocks/head/header`);
+    const header = await chainFetch(`${settings.rpcUrl}/chains/main/blocks/head/header`);
     const headerJson = (await header.json()) as { chain_id?: string; protocol?: string };
     cached = parseProtocolConstants(
       (await raw.json()) as Record<string, unknown>,
@@ -150,7 +172,11 @@ export async function buildRuntime(
     fetchRewardSplit(tzkt, bakerId, cycle);
 
   const estimate: EstimateTransfers = async (recipients) => {
-    const toolkit = new TezosToolkit(settings.rpcUrl);
+    // O Taquito também sai pelo Rust: com `connect-src 'self'`, um cliente HTTP
+    // próprio quebraria na primeira estimativa.
+    const toolkit = new TezosToolkit(
+      new RpcClient(settings.rpcUrl, 'main', new TauriHttpBackend()),
+    );
     const chainConstants = await constants();
     const balance = await rpc.getBalance(settings.signerPublicKeyHash);
     const estimator = createChunkedEstimator(toolkit, chainConstants, {
@@ -200,9 +226,4 @@ export async function buildRuntime(
   });
 
   return { db, store, engine, queue, scheduler, constants, headCycle };
-}
-
-/** Pede a credencial ao cofre do sistema. Ausente é recusa, nunca modo degradado. */
-export function revealClientAuthKey(): Promise<string> {
-  return invoke<string>('signer_reveal_credential');
 }

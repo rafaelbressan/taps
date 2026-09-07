@@ -20,8 +20,10 @@ Esta página é sobre o código.
 |---|---|
 | O arquivo do banco, a conexão e a transação | O motor de payout, inteiro, do estágio 4 |
 | O relógio do agendador (`tokio::interval`) | Quando pagar, quanto e para quem |
-| A credencial de cliente do signer e o HTTP até ele | A montagem da operação e a leitura da cadeia |
-| Backup e a troca de arquivo na restauração | A conferência do candidato antes da troca |
+| A credencial do signer **e a assinatura de autenticação** | O layout dos bytes que se assina (BRES-74) |
+| **Todo HTTP para fora**, contra os endereços da configuração | A montagem da operação e a leitura da cadeia |
+| **Todo caminho de arquivo**, por token do diálogo nativo | A conferência do candidato antes da troca |
+| Backup e a troca de arquivo na restauração | |
 
 **Não existe lógica de dinheiro só para desktop.** O `SqlitePayoutStore`, as
 migrations e o `PayoutEngine` são exatamente os do pacote; o que muda é o
@@ -48,19 +50,36 @@ outro.
 
 A chave que paga vive no host do `octez-signer` e **nunca chega a este
 processo** — nem em coluna de banco, nem em arquivo, nem em variável de
-ambiente. O que o aplicativo guarda é a **credencial de cliente**, que prova ao
-signer quem está pedindo e não move nada sozinha. Ela fica no cofre de
-credenciais do sistema operacional, entra por **arquivo escolhido no diálogo
-nativo** (nunca digitada num campo da tela, conforme o requisito 9 da ADR) e
-não entra no backup.
+ambiente.
 
-**Risco residual, escrito porque existe:** para assinar o pedido de
-autenticação, a credencial atravessa para o JavaScript e fica em memória
-enquanto a janela viver. A alternativa seria uma segunda implementação da
-assinatura em Rust — criptografia nova, escrita fora da revisão que produziu a
-que já existe. A escolha foi reusar `Ed25519ClientAuthenticator`, que é o
-código revisado em BRES-74 e cujo resultado está fixado por um teste contra uma
-captura de um `octez-signer` de verdade.
+O que o aplicativo guarda é a **credencial de cliente**, e ela merece ser
+descrita sem suavizar: ela não guarda os fundos, mas **é capacidade de gasto**.
+Com `--magic-bytes 0x03` o signer continua assinando transferência para quem
+apresentar uma autenticação válida, e as defesas do TAPS — destino conferido
+contra a lista de delegadores, teto por ciclo, idempotência — rodam **dentro**
+desta máquina e não alcançam quem fale direto com o signer. O que o
+`--magic-bytes` fecha é o pior caso: nem com tudo comprometido sai assinatura
+de cabeçalho de bloco, então o baker não é penalizado por dupla assinatura.
+
+Por isso ela **não atravessa para o JavaScript**. Fica no cofre de credenciais
+do sistema operacional, entra por arquivo escolhido no diálogo nativo que o
+**Rust** abre (nunca digitada num campo da tela, conforme o requisito 9 da
+ADR), e a assinatura de autenticação acontece do lado Rust
+(`signer_authenticate`). O que atravessa a ponte é o layout de bytes já montado
+e, de volta, a assinatura pronta.
+
+A primeira versão entregava a credencial à janela, e o Tezos Core & Crypto
+reprovou: a webview não é fronteira nenhuma. `test/fronteira.test.ts` é o
+portão que impede a volta — ele reprova um comando que devolva a credencial, um
+`fetch` fora da passagem, uma CSP que abra `https:`, um caminho de arquivo indo
+como string, e um campo de senha na tela.
+
+O layout dos bytes continua em `buildAuthenticationPayload`, no
+`@tezos-suite/payout`: é a parte difícil e é a parte revisada em BRES-74. O que
+foi para o Rust é a composição de três primitivas — BLAKE2b-256, Ed25519,
+base58check —, e as duas implementações reproduzem o **mesmo** vetor capturado
+de um `octez-signer` de verdade (`src-tauri/src/tezos.rs` e
+`packages/payout-engine/test/unit/signer.spec.ts`).
 
 ## Rodar
 

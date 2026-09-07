@@ -82,9 +82,24 @@ jobs:
       # Portão de desenho, tipos, testes, build e portão de bundle. O último
       # roda depois do build e reprova um `node:` que tenha sobrado no pacote
       # da webview — coisa que teste de unidade nenhum vê.
+      #
+      # `test/fronteira.test.ts` está aí dentro: é o portão que impede a
+      # credencial do signer, um destino de rede ou um caminho de arquivo
+      # voltarem a atravessar para a janela (BRES-48).
       - name: Verify
         working-directory: apps/taps
         run: npm run verify
+
+      # O lado Rust é onde a credencial vive e onde a assinatura de
+      # autenticação acontece. O vetor capturado de um `octez-signer` de
+      # verdade está entre estes testes, e é o mesmo que fixa a implementação
+      # TypeScript — as duas produzem os mesmos bytes, ou uma delas falha aqui.
+      - name: Rust
+        working-directory: apps/taps/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
 
       - name: Bundle
         working-directory: apps/taps

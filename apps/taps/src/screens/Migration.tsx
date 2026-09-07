@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { pickFile } from '../lib/pick';
 import { importLegacyExport, type ImportSummary } from '@tezos-suite/payout-store-sqlite';
 import type { Ready } from '../App';
 import { describe } from '../App';
@@ -48,23 +48,20 @@ export function Migration({ ready, onChanged }: { ready: Ready; onChanged: () =>
   async function importFile() {
     setError(null);
     setSummary(null);
-    const chosen = await open({
-      multiple: false,
-      directory: false,
-      title: 'Arquivo exportado do TAPS antigo (taps-export.sql)',
-    });
-    if (typeof chosen !== 'string') return;
+    const chosen = await pickFile(
+      'legacy-export',
+      'Arquivo exportado do TAPS antigo (taps-export.sql)',
+    );
+    if (!chosen) return;
 
     setBusy(true);
     try {
-      const script = await invoke<string>('read_legacy_export', {
-        request: { path: chosen },
-      });
+      const script = await invoke<string>('read_legacy_export', { token: chosen.token });
       // O digest identifica o arquivo, e é o que impede importar o mesmo
       // histórico duas vezes com outro nome.
       const digest = await sha256(script);
       const result = await importLegacyExport(ready.db, script, {
-        source: chosen,
+        source: chosen.name,
         sourceSha256: digest,
       });
       setSummary(result);

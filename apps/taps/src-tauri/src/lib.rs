@@ -5,28 +5,39 @@
 //! Internet)". Não há servidor HTTP, não há login, não há CORS e não há rate
 //! limit — some a categoria inteira, e com ela os piores achados da análise.
 //!
-//! O que o Rust é dono, aqui:
+//! O que o Rust é dono, aqui — e a lista cresceu depois da revisão do Tezos
+//! Core & Crypto em BRES-48, que reprovou uma fronteira que não era fronteira:
 //!
 //! - **O banco.** Arquivo, conexão e transação (`sql`).
 //! - **O relógio do agendador.** O tique nasce aqui e não num `setInterval` da
 //!   webview: janela escondida faz o WebKit e o WebView2 estrangularem timer, e
 //!   um payout que só acontece com a janela aberta não é agendador.
-//! - **A credencial de cliente do signer** e o HTTP até ele (`signer`).
-//! - **Backup e restauração**, inclusive a troca do arquivo, que precisa da
-//!   conexão fechada.
+//! - **A credencial de cliente do signer e a assinatura de autenticação**
+//!   (`signer`, `tezos`). Ela **não atravessa** para o JavaScript.
+//! - **Todo HTTP para fora** (`http`, `signer::call`), contra os endereços que
+//!   estão na configuração. A janela não escolhe destino, e por isso a CSP
+//!   pode ficar em `connect-src 'self'`.
+//! - **Todo caminho de arquivo** (`paths`), por token do diálogo nativo. A
+//!   janela não escolhe arquivo.
 //!
 //! O que o TypeScript é dono: o motor de payout do estágio 4, inteiro e sem um
-//! ramo só para desktop.
+//! ramo só para desktop, e o layout dos bytes de autenticação — a parte que já
+//! foi revisada em BRES-74 e que não há razão para reescrever aqui.
 
+mod http;
+mod paths;
 mod signer;
 mod sql;
+mod tezos;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use paths::{PathRegistry, PickedPath, Purpose};
+use serde::Serialize;
 use sql::{Database, SqlValue};
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 /// Quanto tempo entre dois tiques do agendador.
 ///
@@ -40,6 +51,7 @@ const TICK_SECONDS: u64 = 60;
 pub struct AppState {
     database: Mutex<Option<Database>>,
     path: PathBuf,
+    picked: PathRegistry,
 }
 
 impl AppState {
@@ -53,6 +65,46 @@ impl AppState {
             None => Err("o banco está fechado — reinicie o TAPS".to_string()),
         }
     }
+
+    /// Um valor de `app_settings`, lido deste lado.
+    ///
+    /// É o que permite os comandos de rede não aceitarem endereço vindo da
+    /// tela: o endereço do signer, do nó e da TzKT são lidos aqui, do mesmo
+    /// banco que a tela escreve mas que o Rust é dono.
+    fn setting(&self, key: &str) -> Result<Option<String>, String> {
+        let rows = self.with_db(|database| {
+            database.query(
+                None,
+                "SELECT value FROM app_settings WHERE key = ?1",
+                &[SqlValue::Text(key.to_string())],
+            )
+        })?;
+        Ok(rows.first().and_then(|row| {
+            row.iter()
+                .find_map(|(name, value)| match (name.as_str(), value) {
+                    ("value", SqlValue::Text(text)) if !text.trim().is_empty() => {
+                        Some(text.trim().to_string())
+                    }
+                    _ => None,
+                })
+        }))
+    }
+
+    fn require_setting(&self, key: &str, why: &str) -> Result<String, String> {
+        self.setting(key)?
+            .ok_or_else(|| format!("falta configurar {why} — abra Configuração"))
+    }
+
+    /// Os dois endereços com que este aplicativo pode falar. Nada mais.
+    fn chain_origins(&self) -> Result<Vec<String>, String> {
+        let mut allowed = Vec::new();
+        for key in ["chain.rpc_url", "chain.tzkt_url"] {
+            if let Some(value) = self.setting(key)? {
+                allowed.push(value);
+            }
+        }
+        Ok(allowed)
+    }
 }
 
 #[derive(Serialize)]
@@ -61,19 +113,29 @@ pub struct AppStatus {
     database_path: String,
     /// `true` quando a credencial de cliente do signer está no cofre do sistema.
     signer_credential_present: bool,
+    /// O `edpk` da credencial guardada, para conferir com o signer. Público.
+    signer_credential_public_key: Option<String>,
     platform: String,
     version: String,
 }
 
 #[tauri::command]
 fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
+    let present = signer::credential_present();
     AppStatus {
         database_path: state.path.to_string_lossy().to_string(),
-        signer_credential_present: signer::credential_present(),
+        signer_credential_present: present,
+        signer_credential_public_key: if present {
+            signer::credential_public_key().ok()
+        } else {
+            None
+        },
         platform: std::env::consts::OS.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
+
+// ---------------------------------------------------------------- banco
 
 #[tauri::command]
 fn sql_query(
@@ -110,8 +172,61 @@ fn sql_rollback(state: tauri::State<'_, AppState>, token: String) -> Result<(), 
     state.with_db(|database| database.finish(&token, false))
 }
 
+// ---------------------------------------------------------------- arquivos
+
+/// Abre o diálogo nativo e guarda o caminho deste lado, devolvendo um token.
+///
+/// O diálogo é aberto pelo Rust de propósito. Com o plugin chamado da tela, o
+/// caminho voltaria como string para o JavaScript e todo comando que o
+/// recebesse voltaria a aceitar caminho arbitrário.
 #[tauri::command]
-fn signer_import_credential(path: String) -> Result<(), String> {
+async fn pick_file(
+    app: tauri::AppHandle,
+    purpose: Purpose,
+    title: String,
+) -> Result<Option<PickedPath>, String> {
+    let chosen = app.dialog().file().set_title(&title).blocking_pick_file();
+    let Some(chosen) = chosen else {
+        return Ok(None);
+    };
+    let path = chosen
+        .into_path()
+        .map_err(|error| format!("caminho inválido: {error}"))?;
+    let state = app.state::<AppState>();
+    state.picked.remember(purpose, path).map(Some)
+}
+
+#[tauri::command]
+async fn pick_save_path(
+    app: tauri::AppHandle,
+    purpose: Purpose,
+    title: String,
+    suggested: String,
+) -> Result<Option<PickedPath>, String> {
+    let chosen = app
+        .dialog()
+        .file()
+        .set_title(&title)
+        .set_file_name(&suggested)
+        .blocking_save_file();
+    let Some(chosen) = chosen else {
+        return Ok(None);
+    };
+    let path = chosen
+        .into_path()
+        .map_err(|error| format!("caminho inválido: {error}"))?;
+    let state = app.state::<AppState>();
+    state.picked.remember(purpose, path).map(Some)
+}
+
+// ---------------------------------------------------------------- signer
+
+#[tauri::command]
+fn signer_import_credential(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<signer::ImportedCredential, String> {
+    let path = state.picked.take(Purpose::SignerCredential, &token)?;
     signer::import_credential_from_file(&path)
 }
 
@@ -120,34 +235,62 @@ fn signer_forget_credential() -> Result<(), String> {
     signer::forget_credential()
 }
 
+/// Assina o pedido de autenticação do signer.
+///
+/// Substitui o antigo `signer_reveal_credential`, que entregava o segredo à
+/// webview. A janela manda o layout montado e recebe uma assinatura; a
+/// credencial não sai daqui.
 #[tauri::command]
-fn signer_reveal_credential() -> Result<String, String> {
-    signer::reveal_credential()
+fn signer_authenticate(payload_hex: String) -> Result<String, String> {
+    signer::authenticate(&payload_hex)
 }
 
 #[tauri::command]
 async fn signer_call(
+    state: tauri::State<'_, AppState>,
+    method: String,
+    path: String,
+    body: Option<String>,
+) -> Result<signer::SignerResponse, String> {
+    let base = state.require_setting("signer.url", "o endereço do octez-signer")?;
+    signer::call(&base, &method, &path, body).await
+}
+
+// ---------------------------------------------------------------- cadeia
+
+#[tauri::command]
+async fn chain_request(
+    state: tauri::State<'_, AppState>,
     url: String,
     method: String,
     body: Option<String>,
-) -> Result<signer::SignerResponse, String> {
-    signer::call(&url, &method, body).await
+) -> Result<http::HttpReply, String> {
+    let allowed = state.chain_origins()?;
+    http::request(&url, &method, body, &allowed).await
 }
+
+// ---------------------------------------------------------------- backup
 
 #[derive(Serialize)]
 pub struct BackupSummary {
-    path: String,
+    name: String,
     bytes: u64,
 }
 
 #[tauri::command]
-fn backup_into(state: tauri::State<'_, AppState>, path: String) -> Result<BackupSummary, String> {
-    let destination = PathBuf::from(&path);
+fn backup_into(state: tauri::State<'_, AppState>, token: String) -> Result<BackupSummary, String> {
+    let destination = state.picked.take(Purpose::BackupDestination, &token)?;
     state.with_db(|database| database.vacuum_into(&destination))?;
     let bytes = std::fs::metadata(&destination)
         .map_err(|error| error.to_string())?
         .len();
-    Ok(BackupSummary { path, bytes })
+    Ok(BackupSummary {
+        name: destination
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        bytes,
+    })
 }
 
 #[derive(Serialize)]
@@ -158,20 +301,20 @@ pub struct RestoreSummary {
 /// Põe um backup no lugar do banco atual.
 ///
 /// A conferência de que o arquivo é mesmo um backup do TAPS acontece do lado
-/// do TypeScript, que abre o candidato por este mesmo comando antes de chamar
-/// aqui. O que **este** comando garante é o resto: a conexão é fechada antes da
-/// troca, o banco substituído é renomeado e não apagado, e o WAL do banco
-/// antigo vai junto — deixá-lo para trás faria o SQLite reproduzi-lo por cima
-/// do backup restaurado.
+/// do TypeScript, que abre o candidato por `inspect_database` antes de chamar
+/// aqui — com o **mesmo token**, que só é consumido nesta chamada. O que este
+/// comando garante é o resto: a conexão é fechada antes da troca, o banco
+/// substituído é renomeado e não apagado, e o WAL do banco antigo vai junto —
+/// deixá-lo para trás faria o SQLite reproduzi-lo por cima do backup.
 #[tauri::command]
 fn restore_backup(
     state: tauri::State<'_, AppState>,
-    path: String,
+    token: String,
     stamp: String,
 ) -> Result<RestoreSummary, String> {
-    let candidate = PathBuf::from(&path);
+    let candidate = state.picked.take(Purpose::BackupToRestore, &token)?;
     if !candidate.exists() {
-        return Err(format!("não achei o arquivo {path}"));
+        return Err("o arquivo escolhido não está mais lá".to_string());
     }
 
     let mut guard = state
@@ -181,7 +324,7 @@ fn restore_backup(
     // Fecha a conexão. A partir daqui o arquivo é só um arquivo.
     *guard = None;
 
-    let replaced = state.path.with_extension(format!("substituido-{stamp}"));
+    let replaced = with_suffix(&state.path, &format!(".substituido-{stamp}"));
     if state.path.exists() {
         std::fs::rename(&state.path, &replaced).map_err(|error| error.to_string())?;
         for suffix in ["-wal", "-shm"] {
@@ -199,26 +342,34 @@ fn restore_backup(
     })
 }
 
-/// Abre outro arquivo de banco só para leitura, para conferir um backup.
+/// Abre o candidato a backup só para leitura, **sem consumir o token**.
+///
+/// Conferir um backup são três consultas, e restaurar vem logo depois com o
+/// mesmo token — por isso `peek` e não `take`.
+///
+/// O `sql` vem da tela, e isso é aceitável aqui e em nenhum outro lugar: o
+/// arquivo é o que o baker escolheu, a conexão é descartada ao fim da chamada,
+/// e o banco vivo não é tocado. O que a tela **não** escolhe é o arquivo.
 #[tauri::command]
-fn inspect_database(path: String, sql: String) -> Result<Vec<Vec<(String, SqlValue)>>, String> {
-    let database = Database::open(&PathBuf::from(path))?;
+fn inspect_database(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    sql: String,
+) -> Result<Vec<Vec<(String, SqlValue)>>, String> {
+    let path = state.picked.peek(Purpose::BackupToRestore, &token)?;
+    let database = Database::open(&path)?;
     database.query(None, &sql, &[])
-}
-
-#[derive(Deserialize)]
-pub struct ImportRequest {
-    path: String,
 }
 
 /// Lê o arquivo exportado do banco antigo. O que fazer com ele é do TypeScript.
 #[tauri::command]
-fn read_legacy_export(request: ImportRequest) -> Result<String, String> {
-    std::fs::read_to_string(&request.path).map_err(|error| {
+fn read_legacy_export(state: tauri::State<'_, AppState>, token: String) -> Result<String, String> {
+    let path = state.picked.take(Purpose::LegacyExport, &token)?;
+    std::fs::read_to_string(&path).map_err(|error| {
         format!(
-            "não consegui ler {} ({error}) — confira se o caminho está certo e se o arquivo \
-             veio do comando SCRIPT TO do banco antigo",
-            request.path
+            "não consegui ler {} ({error}) — confira se o arquivo veio do comando SCRIPT TO do \
+             banco antigo",
+            path.display()
         )
     })
 }
@@ -242,6 +393,7 @@ pub fn run() {
             app.manage(AppState {
                 database: Mutex::new(Some(database)),
                 path,
+                picked: PathRegistry::default(),
             });
 
             // O relógio do agendador. Um evento, nada mais: quem decide se é
@@ -264,10 +416,13 @@ pub fn run() {
             sql_begin,
             sql_commit,
             sql_rollback,
+            pick_file,
+            pick_save_path,
             signer_import_credential,
             signer_forget_credential,
-            signer_reveal_credential,
+            signer_authenticate,
             signer_call,
+            chain_request,
             backup_into,
             restore_backup,
             inspect_database,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { pickFile } from '../lib/pick';
 import type { Ready } from '../App';
 import { describe } from '../App';
 import { SETTING_KEYS, readRawSettings, writeRawSettings } from '../lib/settings';
@@ -123,6 +123,9 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
   const [credentialPresent, setCredentialPresent] = useState(
     ready.status.signer_credential_present,
   );
+  const [credentialPublicKey, setCredentialPublicKey] = useState(
+    ready.status.signer_credential_public_key,
+  );
 
   useEffect(() => {
     (async () => {
@@ -147,25 +150,30 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
   }
 
   /**
-   * O segredo entra por arquivo, não por campo de texto.
+   * O segredo entra por arquivo, e a tela nem sabe onde o arquivo está.
    *
    * O requisito 9 da ADR-0001 proíbe coletar segredo por `<input>` de HTML: a
    * parede que protege a chave não vale nada se o que a abre nasce do lado
-   * errado dela. Aqui a tela escolhe o CAMINHO pelo diálogo nativo, e o
-   * conteúdo vai do disco direto para o cofre do sistema — sem passar por
-   * JavaScript nenhum.
+   * errado dela. Aqui o diálogo é aberto pelo Rust, que guarda o caminho e
+   * devolve um token; o conteúdo vai do disco para o cofre do sistema sem
+   * passar por JavaScript nenhum.
+   *
+   * O que volta para a tela é o `edpk` derivado — público — para o baker
+   * conferir contra o que ele autorizou no signer.
    */
   async function importCredential() {
     setError(null);
     try {
-      const chosen = await open({
-        multiple: false,
-        directory: false,
-        title: 'Arquivo da credencial de cliente do octez-signer',
+      const chosen = await pickFile(
+        'signer-credential',
+        'Arquivo da credencial de cliente do octez-signer',
+      );
+      if (!chosen) return;
+      const imported = await invoke<{ public_key: string }>('signer_import_credential', {
+        token: chosen.token,
       });
-      if (typeof chosen !== 'string') return;
-      await invoke('signer_import_credential', { path: chosen });
       setCredentialPresent(true);
+      setCredentialPublicKey(imported.public_key);
       onSaved();
     } catch (caught) {
       setError(describe(caught));
@@ -177,6 +185,7 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
     try {
       await invoke('signer_forget_credential');
       setCredentialPresent(false);
+      setCredentialPublicKey(null);
       onSaved();
     } catch (caught) {
       setError(describe(caught));
@@ -199,9 +208,11 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       <section className="t-card" style={{ marginBottom: 'var(--s-6)' }}>
         <h2 className="pair__key">Credencial de cliente do octez-signer</h2>
         <p className="note">
-          Esta é a chave que prova ao signer que é este computador pedindo. Ela{' '}
-          <strong>não</strong> é a chave que paga: sozinha, não move nada. Fica no cofre de
-          credenciais do sistema operacional — não no banco, e por isso não entra no backup.
+          É com ela que este computador prova ao signer quem está pedindo. Ela não é a chave
+          que guarda os fundos — essa fica no host do <code>octez-signer</code> —, mas{' '}
+          <strong>é capacidade de gasto</strong>: quem a tiver consegue pedir assinatura de
+          transferência ao seu signer. Trate-a como uma chave. Fica no cofre de credenciais do
+          sistema operacional, não no banco, e por isso não entra no backup.
         </p>
         <div className="pair">
           <span className="pair__key">Estado</span>
@@ -209,11 +220,25 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
             {credentialPresent ? 'guardada' : 'ausente'}
           </span>
         </div>
+        {credentialPublicKey && (
+          <div className="pair">
+            <span className="pair__key">Chave pública</span>
+            <span className="pair__value t-address" title={credentialPublicKey}>
+              {credentialPublicKey}
+            </span>
+          </div>
+        )}
         <p className="note" style={{ marginTop: 'var(--s-3)' }}>
           A chave entra por arquivo, e não digitada aqui: um segredo colado numa página não
           deveria existir. Escolha o arquivo que o <code>octez-signer gen keys</code> deixou —
           ele vai do disco direto para o cofre do sistema, sem passar por esta tela. Depois de
           importado, pode apagar o arquivo.
+        </p>
+        <p className="note">
+          O arquivo precisa ter <strong>uma chave só</strong>. O <code>secret_keys</code> do
+          próprio signer tem várias, e uma delas é a de pagamento — o TAPS recusa esse arquivo
+          em vez de escolher por você. Depois de importar, compare a chave pública acima com o
+          que você autorizou no signer.
         </p>
         <div className="row" style={{ marginTop: 'var(--s-4)' }}>
           <button type="button" className="t-button" onClick={importCredential}>

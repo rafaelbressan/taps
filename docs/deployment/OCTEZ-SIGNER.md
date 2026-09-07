@@ -83,8 +83,10 @@ Esse endereço precisa ter saldo: é dele que os pagamentos saem.
 ## Passo 2 — Crie a credencial de cliente
 
 O signer vai rodar recusando qualquer pedido que não venha assinado por uma
-chave que ele conhece. Essa chave **não move dinheiro**: ela só diz *quem está
-pedindo*.
+chave que ele conhece. Essa chave diz *quem está pedindo* — e vale ser exato
+sobre o que isso significa: ela **não guarda os fundos**, mas **é capacidade de
+gasto**. Quem a tiver consegue pedir ao seu signer que assine uma
+transferência. Trate-a como uma chave, não como um crachá.
 
 ```bash
 docker run --rm -v ~/taps-signer/client:/data --entrypoint octez-signer \
@@ -237,16 +239,27 @@ diferente de onde você guarda a senha.
 
 Vale escrever, porque o contrário seria falso conforto.
 
-A decisão de custódia elimina o **roubo da chave**. Ela não elimina o **uso
-indevido** dela: um invasor com controle da máquina do TAPS e da credencial de
-cliente consegue pedir assinaturas. O que limita o estrago é do lado do TAPS,
-não do signer:
+A decisão de custódia elimina o **roubo da chave de pagamento**. Ela não
+elimina o **uso indevido** dela: quem tiver a credencial de cliente e alcançar
+a porta do signer consegue pedir assinatura de transferência.
 
-- o destino de cada transferência é conferido contra a lista de delegadores
-  calculada localmente, antes de a assinatura ser pedida;
-- há um teto por ciclo, que você escolheu, e acima dele o TAPS recusa;
-- toda distribuição é idempotente: o mesmo ciclo não é pago duas vezes.
+Vale ser franco sobre o que **não** protege contra isso. O TAPS confere o
+destino de cada transferência contra a lista de delegadores que ele mesmo
+calculou, tem um teto por ciclo que você escolheu, e não paga o mesmo ciclo
+duas vezes. As três coisas rodam **dentro** da máquina do TAPS, e por isso não
+alcançam quem fale direto com o signer. Elas protegem contra o TAPS errar, não
+contra alguém no lugar dele.
 
-`--magic-bytes 0x03` fecha o resto: mesmo com tudo comprometido, o signer não
-assina cabeçalho de bloco nem attestation, então o seu baker não é penalizado
-por dupla assinatura.
+O que protege de verdade, e por isso não é opcional:
+
+- **`--require-authentication`** — sem a credencial, ninguém pede nada.
+- **`--magic-bytes 0x03`** — mesmo com tudo comprometido, o signer não assina
+  cabeçalho de bloco nem attestation, então o seu baker não é penalizado por
+  dupla assinatura. É o pior caso fechado.
+- **Rede** — só a máquina do TAPS deveria alcançar a porta 6732.
+- **A credencial no cofre do sistema operacional**, do lado do TAPS, sem
+  atravessar para a janela do aplicativo e sem entrar no backup.
+
+E é por isso que o arquivo com a credencial deve ser apagado da máquina do TAPS
+depois de importado, e que o TAPS recusa um arquivo com mais de uma chave: o
+`secret_keys` do signer tem várias, e uma delas é a de pagamento.

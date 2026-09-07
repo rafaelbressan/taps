@@ -93,8 +93,20 @@ que ninguém escolheu não é um teto.
 
 Ainda em **Configuração**, clique em **Escolher o arquivo da credencial** e
 aponte para o arquivo do passo 1. A chave vai do disco direto para o cofre do
-sistema — ela não passa pela tela e não é digitada. Depois disso você pode
-apagar o arquivo.
+sistema — ela não passa pela tela e não é digitada.
+
+Três coisas para conferir aí:
+
+- O arquivo precisa ter **uma chave só**. O `secret_keys` do próprio signer tem
+  várias, e uma delas é a de pagamento; o TAPS recusa esse arquivo em vez de
+  escolher por você.
+- Depois de importar, a tela mostra a **chave pública** (`edpk…`). Compare com
+  a que você autorizou no signer. Se forem diferentes, você importou a errada.
+- **Apague o arquivo** da máquina do TAPS. O cofre do sistema passa a ser a
+  cópia.
+
+Essa credencial não guarda os seus fundos, mas quem a tiver consegue pedir ao
+seu signer que assine uma transferência. Trate-a como uma chave.
 
 ### O que você **não** vai encontrar na configuração, e por quê
 

@@ -26,14 +26,15 @@
     "@taquito/taquito": "^25.0.0",
     "@taquito/utils": "^25.0.0",
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-opener": "^2.5.5",
     "buffer": "^6.0.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "blakejs": "^1.2.1",
     "@stablelib/ed25519": "^1.0.3",
-    "@taquito/local-forging": "25.0.0"
+    "@taquito/local-forging": "25.0.0",
+    "@taquito/rpc": "^25.0.0",
+    "@taquito/http-utils": "^25.0.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

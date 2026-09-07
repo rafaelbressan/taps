@@ -10,12 +10,7 @@ import { Migration } from './screens/Migration';
 import { Settings } from './screens/Settings';
 import { Trail } from './screens/Trail';
 import { Fault } from './ui/Fault';
-import {
-  buildRuntime,
-  openDatabase,
-  revealClientAuthKey,
-  type Runtime,
-} from './lib/runtime';
+import { buildRuntime, openDatabase, type Runtime } from './lib/runtime';
 import {
   missingSettings,
   parseSettings,
@@ -48,6 +43,8 @@ const TABS: { readonly id: Tab; readonly label: string }[] = [
 interface AppStatus {
   readonly database_path: string;
   readonly signer_credential_present: boolean;
+  /** O `edpk` da credencial guardada. Público — a chave privada não sai do Rust. */
+  readonly signer_credential_public_key: string | null;
   readonly platform: string;
   readonly version: string;
 }
@@ -131,19 +128,17 @@ export function App() {
             setSettings(parsed);
             setRuntime(null);
             setBlocked(
-              'Falta a credencial de cliente do octez-signer. Ela é a chave que prova ao ' +
-                'signer que é este computador pedindo — não é a chave que paga, e sem ela o ' +
-                'signer recusa o pedido. Abra Configuração e cadastre a chave que você ' +
-                'autorizou no signer.',
+              'Falta a credencial de cliente do octez-signer. É com ela que este computador ' +
+                'prova ao signer quem está pedindo, e sem ela o signer recusa o pedido. Abra ' +
+                'Configuração e escolha o arquivo da chave que você autorizou no signer.',
             );
           }
           return;
         }
 
-        const clientAuthKey = await revealClientAuthKey();
+        // Nenhuma credencial atravessa: o motor assina pedindo ao Rust.
         const built = await buildRuntime(ready.db, ready.store, {
           settings: parsed,
-          clientAuthKey,
           schedulerPolicy: SCHEDULER_POLICY,
         });
         if (!cancelled) {
