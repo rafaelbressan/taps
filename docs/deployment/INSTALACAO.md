@@ -100,7 +100,7 @@ Abra o TAPS. A tela de início vai dizer, em português, o que ainda falta. Vá 
 | Campo | O que é |
 |---|---|
 | Endereço do baker | o `tz1…` cujas recompensas serão distribuídas |
-| Rede | comece por `ghostnet`. `mainnet` move dinheiro de verdade |
+| Rede | comece por `shadownet`. `mainnet` move dinheiro de verdade |
 | Endereço do nó (RPC) | quem estima e injeta a operação |
 | Endereço da TzKT | de onde vêm o ciclo e a divisão das recompensas |
 | Endereço do octez-signer | tem que começar com `https://` |
@@ -142,7 +142,7 @@ seu signer que assine uma transferência. Trate-a como uma chave.
 
 ## Passo 4 — Confira em rede de teste
 
-Deixe a rede em `ghostnet` e clique em **Rodar agora**, na tela de início. O
+Deixe a rede em `shadownet` e clique em **Rodar agora**, na tela de início. O
 TAPS vai:
 
 1. Ver qual é o ciclo atual.
