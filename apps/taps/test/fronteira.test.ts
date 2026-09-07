@@ -83,6 +83,34 @@ describe('a janela não escolhe destino de rede', () => {
   });
 });
 
+describe('a estimativa tem signer, e ele não assina', () => {
+  const runtime = code(join(appRoot, 'src/lib/runtime.ts'));
+
+  it('o toolkit da estimativa recebe um signer', () => {
+    // BRES-133: ele subia sem nenhum. O `NoopSigner`, que é o ocupante padrão
+    // daquele campo no Taquito, derrubava todo ciclo em "No signer has been
+    // configured" — depois da fila, do split e do plano.
+    expect(runtime).toMatch(/toolkit\.setProvider\(\{\s*signer:\s*estimationSigner\s*\}\)/);
+    expect(runtime).toMatch(/new EstimationSigner\(/);
+  });
+
+  it('o signer remoto não é entregue a nenhum toolkit', () => {
+    // Seria o conserto de uma linha, e daria capacidade de gasto ao lado que
+    // só planeja: um `send()` de distância de um lote que nunca passou pela
+    // conferência de bytes do `RpcBatchInjector`.
+    for (const file of files) {
+      expect(code(file), file).not.toMatch(/setProvider\(\{[^}]*\bsigner:\s*signer\b/);
+      expect(code(file), file).not.toMatch(/setSignerProvider\s*\(/);
+    }
+  });
+
+  it('nenhuma tela traz um signer que guarda chave', () => {
+    for (const file of files) {
+      expect(code(file), file).not.toMatch(/@taquito\/signer|InMemorySigner/);
+    }
+  });
+});
+
 describe('a confirmação é da tela, não do navegador', () => {
   it('nenhuma pergunta destrutiva sai por `window.confirm`', () => {
     // BRES-124: a confirmação da restauração era um `window.confirm`. Na
