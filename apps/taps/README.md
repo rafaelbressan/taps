@@ -123,7 +123,8 @@ revisão do Suite Design & Journey.
 | Alvo | Como | Situação |
 |---|---|---|
 | Windows 10/11 | artefato `nsis` do CI | **instalado e rodado de verdade** (BRES-110) — instala sem privilégio de administrador, abre, renderiza, e recusa operar sem configuração |
-| Linux | artefato `deb`/`appimage` do CI | empacota e o binário sobe; **a janela não foi vista** — falta um desktop Linux de verdade |
+| Linux | artefato `appimage` do CI | **rodado de verdade** (BRES-110) num Debian 13 com GNOME/Wayland: abre, renderiza a 1180×820, cria o banco e aplica as migrations sozinho |
+| Linux (`.deb`) | artefato `deb` do CI | dependências conferidas contra o Debian 13 (`libwebkit2gtk-4.1-0`, `libgtk-3-0` presentes) e `apt-get install -s` limpo; **o `dpkg -i` em si não foi feito** — pede senha de root na máquina do Rafael |
 | iOS / macOS | — | fora do escopo (ADR-0001 §8) |
 
 O instalador **não é assinado**. O Windows mostra o aviso do SmartScreen na
@@ -131,6 +132,11 @@ primeira execução, e isso continua assim até existir um certificado — que �
 gasto e decisão do Rafael, não da squad.
 
 O `.github/workflows/desktop.yml` monta os dois num runner de cada sistema.
+
+Para rodar num desktop remoto por SSH, o que faltava era o cookie do XWayland:
+`XAUTHORITY=$(ls -t /run/user/1000/.mutter-Xwaylandauth* | head -1)` com
+`DISPLAY=:0` e `GDK_BACKEND=x11`. Sem ele o GTK morre com "Failed to
+initialize gtk backend", que parece defeito do aplicativo e não é.
 
 ## Desenho
 

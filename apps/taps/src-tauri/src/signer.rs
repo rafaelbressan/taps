@@ -134,6 +134,29 @@ pub fn store_credential(secret: &str) -> Result<ImportedCredential, String> {
     Ok(ImportedCredential { public_key })
 }
 
+/// Os três estados que existem de verdade.
+///
+/// `Absent` e `VaultDown` davam os dois `false`, e a tela dizia "falta a
+/// credencial" para quem tinha a credencial e não tinha cofre — mandando o
+/// baker procurar um arquivo que ele já importou.
+pub enum CredentialState {
+    Present,
+    Absent,
+    VaultDown(String),
+}
+
+pub fn credential_state() -> CredentialState {
+    let entry = match keyring::Entry::new(SERVICE, ACCOUNT) {
+        Ok(entry) => entry,
+        Err(error) => return CredentialState::VaultDown(describe_keyring(error)),
+    };
+    match entry.get_password() {
+        Ok(_) => CredentialState::Present,
+        Err(keyring::Error::NoEntry) => CredentialState::Absent,
+        Err(error) => CredentialState::VaultDown(describe_keyring(error)),
+    }
+}
+
 /// O que o baker vê depois de importar a CA do signer.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportedTlsCa {
@@ -204,12 +227,6 @@ fn first_certificate_fingerprint(pem: &str) -> Result<String, String> {
         .join(":"))
 }
 
-pub fn credential_present() -> bool {
-    keyring::Entry::new(SERVICE, ACCOUNT)
-        .and_then(|entry| entry.get_password())
-        .is_ok()
-}
-
 /// O `edpk` da credencial guardada, para a tela mostrar. Público, por definição.
 pub fn credential_public_key() -> Result<String, String> {
     let stored = load()?;
@@ -241,10 +258,12 @@ fn load() -> Result<Zeroizing<String>, String> {
     let secret = keyring::Entry::new(SERVICE, ACCOUNT)
         .map_err(describe_keyring)?
         .get_password()
-        .map_err(|_| {
-            "não há credencial de cliente do signer guardada nesta máquina — abra Configuração \
-             e escolha o arquivo da chave que você autorizou no `octez-signer`"
-                .to_string()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => "não há credencial de cliente do signer guardada nesta \
+                 máquina — abra Configuração e escolha o arquivo da chave que você autorizou \
+                 no `octez-signer`"
+                .to_string(),
+            other => describe_keyring(other),
         })?;
     Ok(Zeroizing::new(secret))
 }

@@ -6,6 +6,7 @@ import {
   INTEGRITY_CHECK,
   SCHEMA_VERSION_QUERY,
   judgeBackup,
+  judgeUnreadable,
   type SqlRow,
 } from '@tezos-suite/payout-store-sqlite';
 import type { Ready } from '../App';
@@ -121,7 +122,13 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
       // escrito por uma versão mais nova é recusado com o motivo, e o banco
       // atual fica como estava. Conferir não gasta o token — restaurar vem
       // depois e usa o mesmo.
-      const integrity = await queryOtherDatabase(chosen.token, INTEGRITY_CHECK);
+      // Um `.txt` nem chega a abrir: o SQLite recusa antes, e a mensagem dele
+      // é em inglês. `judgeUnreadable` diz a mesma coisa em português.
+      const integrity = await queryOtherDatabase(chosen.token, INTEGRITY_CHECK).catch(
+        (cause: unknown) => {
+          throw judgeUnreadable(chosen.name, cause);
+        },
+      );
       const verdict = integrity[0] ? String(integrity[0].integrity_check) : 'sem resposta';
       const applied = await queryOtherDatabase(chosen.token, SCHEMA_VERSION_QUERY).catch(
         () => [],

@@ -96,3 +96,33 @@ export function judgeBackup(input: {
   }
   return schemaVersion;
 }
+
+/**
+ * Traduz a recusa que vem do driver ao abrir o candidato.
+ *
+ * `judgeBackup` decide sobre um arquivo que já abriu. Um `.txt` não chega lá:
+ * o SQLite recusa antes, com "file is not a database" — em inglês, e sem dizer
+ * o que fazer. No aplicativo desktop essa string vinha do Rust e ia crua para a
+ * tela (BRES-124).
+ *
+ * Fica junto do resto do julgamento porque é a mesma decisão: se o arquivo
+ * serve ou não, e por quê, em português.
+ */
+export function judgeUnreadable(path: string, cause: unknown): BackupError {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (/file is not a database|not a database|SQLITE_NOTADB/i.test(message)) {
+    return new BackupError(
+      `${path} não é um banco de dados — restaure a partir do arquivo que o próprio botão ` +
+        '"Salvar backup" gerou',
+    );
+  }
+  if (/unable to open database file|SQLITE_CANTOPEN/i.test(message)) {
+    return new BackupError(
+      `não consegui abrir ${path} — confira se o arquivo ainda está onde estava e se você ` +
+        'tem permissão de leitura nele',
+    );
+  }
+  // Motivo desconhecido continua aparecendo inteiro: uma mensagem em inglês
+  // que ninguém previu é melhor que "erro ao restaurar".
+  return new BackupError(`não consegui ler ${path} para conferir: ${message}`);
+}

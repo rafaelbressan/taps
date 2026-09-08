@@ -173,10 +173,14 @@ export function Home(props: {
             <span className="pair__value">
               {chainError ? (
                 <span className="t-field__error">não lido</span>
-              ) : headCycle === null ? (
+              ) : headCycle !== null ? (
+                <span className="t-cycle">{headCycle}</span>
+              ) : runtime ? (
+                // Só há esqueleto enquanto existe pedido em voo. Sem motor não
+                // há pedido: o efeito acima nem chega a perguntar o ciclo.
                 <span className="t-skeleton" />
               ) : (
-                <span className="t-cycle">{headCycle}</span>
+                <span className="t-field__error">não lido</span>
               )}
             </span>
           </div>
@@ -210,7 +214,11 @@ export function Home(props: {
           <div className="pair">
             <span className="pair__key">Credencial do signer</span>
             <span className="pair__value">
-              {ready.status.signer_credential_present ? 'no cofre do sistema' : 'ausente'}
+              {ready.status.signer_credential_present
+                ? 'no cofre do sistema'
+                : ready.status.signer_vault_error
+                  ? 'cofre não respondeu'
+                  : 'ausente'}
             </span>
           </div>
           <p className="note" style={{ marginTop: 'var(--s-3)' }}>

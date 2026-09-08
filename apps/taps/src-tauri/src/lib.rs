@@ -151,6 +151,10 @@ pub struct AppStatus {
     signer_credential_present: bool,
     /// O `edpk` da credencial guardada, para conferir com o signer. Público.
     signer_credential_public_key: Option<String>,
+    /// Preenchido quando o cofre do sistema não respondeu. Enquanto isso vale,
+    /// `signer_credential_present: false` não quer dizer "não importou": quer
+    /// dizer "não deu para perguntar".
+    signer_vault_error: Option<String>,
     /// `true` quando o baker importou a CA do signer (BRES-144). Sem ela o
     /// aplicativo só confia em certificado de CA pública, que um signer de
     /// LAN não tem.
@@ -161,7 +165,8 @@ pub struct AppStatus {
 
 #[tauri::command]
 fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
-    let present = signer::credential_present();
+    let state_of_credential = signer::credential_state();
+    let present = matches!(state_of_credential, signer::CredentialState::Present);
     AppStatus {
         database_path: state.path.to_string_lossy().to_string(),
         signer_credential_present: present,
@@ -169,6 +174,10 @@ fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
             signer::credential_public_key().ok()
         } else {
             None
+        },
+        signer_vault_error: match state_of_credential {
+            signer::CredentialState::VaultDown(why) => Some(why),
+            _ => None,
         },
         signer_tls_ca_present: state.setting(SIGNER_TLS_CA_KEY).ok().flatten().is_some(),
         platform: std::env::consts::OS.to_string(),

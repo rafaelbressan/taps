@@ -75,6 +75,18 @@ sudo apt install ./TAPS_0.1.0_amd64.deb
 O `apt` resolve sozinho as duas dependências (`libwebkit2gtk-4.1-0` e
 `libgtk-3-0`). Para remover depois: `sudo apt remove taps`.
 
+No fim ele costuma imprimir um aviso assim:
+
+```
+N: Download is performed unsandboxed as root as file '/home/você/Downloads/…'
+   couldn't be accessed by user '_apt'. - pkgAcquire::Run (13: Permission denied)
+```
+
+**Isso não é erro e a instalação deu certo.** O `apt` tenta ler o arquivo como
+o usuário `_apt`, que não entra na sua pasta pessoal porque ela é sua e de mais
+ninguém; então ele lê como root e avisa. Se aparecer, confira com
+`dpkg -l taps` — uma linha começando por `ii` quer dizer instalado.
+
 Precisa de Debian 12 ou Ubuntu 22.04 para cima — versões mais antigas trazem o
 webkit 4.0 e o pacote não instala.
 
@@ -100,7 +112,7 @@ Abra o TAPS. A tela de início vai dizer, em português, o que ainda falta. Vá 
 | Campo | O que é |
 |---|---|
 | Endereço do baker | o `tz1…` cujas recompensas serão distribuídas |
-| Rede | comece por `ghostnet`. `mainnet` move dinheiro de verdade |
+| Rede | comece por `shadownet`. `mainnet` move dinheiro de verdade |
 | Endereço do nó (RPC) | quem estima e injeta a operação |
 | Endereço da TzKT | de onde vêm o ciclo e a divisão das recompensas |
 | Endereço do octez-signer | tem que começar com `https://` |
@@ -142,7 +154,7 @@ seu signer que assine uma transferência. Trate-a como uma chave.
 
 ## Passo 4 — Confira em rede de teste
 
-Deixe a rede em `ghostnet` e clique em **Rodar agora**, na tela de início. O
+Deixe a rede em `shadownet` e clique em **Rodar agora**, na tela de início. O
 TAPS vai:
 
 1. Ver qual é o ciclo atual.
