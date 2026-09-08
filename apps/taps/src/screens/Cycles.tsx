@@ -3,6 +3,7 @@ import { buildCycleReport, type CycleReport, type DistributionStatus } from '@te
 import type { Ready } from '../App';
 import { describe } from '../App';
 import type { TapsSettings } from '../lib/settings';
+import { statusText } from '../lib/format';
 import { Address } from '../ui/Address';
 import { Amount } from '../ui/Amount';
 import { Empty } from '../ui/Empty';
@@ -75,8 +76,9 @@ export function Cycles({ ready, settings }: { ready: Ready; settings: TapsSettin
     <>
       <h1 className="page__title">Ciclos</h1>
       <p className="page__lede">
-        Um ciclo por linha, do mais novo para o mais antigo. Cada distribuição tem hash
-        próprio e é gravada antes de a operação existir — é isso que impede pagar duas vezes.
+        Escolha um ciclo e veja o que foi pago nele, delegador por delegador. Cada
+        distribuição tem hash próprio e é gravada antes de a operação existir — é isso que
+        impede pagar duas vezes.
       </p>
 
       {error && (
@@ -105,7 +107,7 @@ export function Cycles({ ready, settings }: { ready: Ready; settings: TapsSettin
             >
               {statuses.map(([cycle, status]) => (
                 <option key={cycle} value={cycle}>
-                  {cycle} — {status}
+                  ciclo {cycle} — {statusText(status)}
                 </option>
               ))}
             </select>
@@ -122,11 +124,9 @@ function Report({ report }: { report: CycleReport }) {
   return (
     <div className="stack">
       <section className="t-card">
-        <div className="pair">
-          <span className="pair__key">Estado</span>
-          <span className="pair__value">
-            <Status value={report.distributionStatus} />
-          </span>
+        <div className="report__head">
+          <h2 className="card__title">Ciclo {report.cycle}</h2>
+          <Status value={report.distributionStatus} />
         </div>
         <div className="pair">
           <span className="pair__key">Bolo do ciclo</span>
@@ -160,40 +160,48 @@ function Report({ report }: { report: CycleReport }) {
         </div>
       </section>
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Delegador</th>
-            <th className="num">Devido</th>
-            <th className="num">Pago</th>
-            <th className="num">Dívida</th>
-            <th>Estado</th>
-            <th>Operação</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.rows.map((row) => (
-            <tr key={row.address}>
-              <td>
-                <Address value={row.address} />
-              </td>
-              <td className="num">
-                <Amount mutez={row.payableMutez} />
-              </td>
-              <td className="num">
-                <Amount mutez={row.paidMutez} />
-              </td>
-              <td className="num">
-                <Amount mutez={row.debtMutez} />
-              </td>
-              <td>
-                <Status value={row.status} />
-              </td>
-              <td>{row.opHash ? <Address value={row.opHash} /> : '—'}</td>
+      <div className="table__frame">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Delegador</th>
+              <th className="num">
+                Devido <span className="table__unit">ꜩ</span>
+              </th>
+              <th className="num">
+                Pago <span className="table__unit">ꜩ</span>
+              </th>
+              <th className="num">
+                Dívida <span className="table__unit">ꜩ</span>
+              </th>
+              <th>Estado</th>
+              <th>Operação</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {report.rows.map((row) => (
+              <tr key={row.address}>
+                <td>
+                  <Address value={row.address} />
+                </td>
+                <td className="num">
+                  <Amount mutez={row.payableMutez} bare />
+                </td>
+                <td className="num">
+                  <Amount mutez={row.paidMutez} bare />
+                </td>
+                <td className="num">
+                  <Amount mutez={row.debtMutez} bare />
+                </td>
+                <td>
+                  <Status value={row.status} />
+                </td>
+                <td>{row.opHash ? <Address value={row.opHash} /> : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

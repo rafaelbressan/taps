@@ -26,92 +26,136 @@ interface Field {
   readonly label: string;
   readonly hint: string;
   readonly placeholder?: string;
+  /**
+   * Um campo de duas opções fixas não é um campo de texto.
+   *
+   * `includeBlockFees` era `<input>` livre e o parser faz
+   * `text(...) === 'true'`: digitar "sim", "1" ou "True" gravava `false` sem
+   * dizer nada — e o que esse campo decide é se as taxas de bloco entram no
+   * bolo dos delegadores. Um erro de digitação virava menos dinheiro para
+   * outra pessoa, em silêncio.
+   */
+  readonly choices?: readonly { readonly value: string; readonly label: string }[];
 }
 
-const FIELDS: readonly Field[] = [
+/** Os grupos existem porque catorze campos num nível só não têm ordem de leitura. */
+interface Group {
+  readonly title: string;
+  readonly why: string;
+  readonly fields: readonly Field[];
+}
+
+const GROUPS: readonly Group[] = [
   {
-    key: SETTING_KEYS.bakerAddress,
-    label: 'Endereço do baker',
-    hint: 'O endereço cujas recompensas este TAPS distribui.',
-    placeholder: 'tz1…',
+    title: 'Baker',
+    why: 'Por qual endereço esta instalação responde, e a partir de quando.',
+    fields: [
+      {
+        key: SETTING_KEYS.bakerAddress,
+        label: 'Endereço do baker',
+        hint: 'O endereço cujas recompensas este TAPS distribui.',
+        placeholder: 'tz1…',
+      },
+      {
+        key: SETTING_KEYS.fromCycle,
+        label: 'Primeiro ciclo desta instalação',
+        hint: 'Sem ele, "todo ciclo não pago" alcançaria o começo da cadeia.',
+        placeholder: '900',
+      },
+    ],
   },
   {
-    key: SETTING_KEYS.network,
-    label: 'Rede',
-    hint: 'mainnet move dinheiro de verdade. Comece numa rede de teste.',
-    placeholder: 'shadownet',
+    title: 'Rede',
+    why: 'De onde vêm os números e por onde a operação sai. mainnet move dinheiro de verdade.',
+    fields: [
+      {
+        key: SETTING_KEYS.network,
+        label: 'Rede',
+        hint: 'mainnet move dinheiro de verdade. Comece numa rede de teste.',
+        placeholder: 'shadownet',
+      },
+      {
+        key: SETTING_KEYS.rpcUrl,
+        label: 'Endereço do nó (RPC)',
+        hint: 'O nó que estima, pré-aplica e injeta a operação.',
+        placeholder: 'https://…',
+      },
+      {
+        key: SETTING_KEYS.tzktApiUrl,
+        label: 'Endereço da TzKT',
+        hint: 'De onde vêm o ciclo, o split de recompensa e o estado da operação.',
+        placeholder: 'https://api.shadownet.tzkt.io',
+      },
+    ],
   },
   {
-    key: SETTING_KEYS.rpcUrl,
-    label: 'Endereço do nó (RPC)',
-    hint: 'O nó que estima, pré-aplica e injeta a operação.',
-    placeholder: 'https://…',
+    title: 'Signer',
+    why: 'Quem assina, e de qual endereço o dinheiro sai. A chave em si nunca chega aqui.',
+    fields: [
+      {
+        key: SETTING_KEYS.signerUrl,
+        label: 'Endereço do octez-signer',
+        hint: 'Precisa ser https://. Em texto claro, qualquer um no caminho troca os bytes que o signer vai assinar.',
+        placeholder: 'https://192.168.1.10:6732',
+      },
+      {
+        key: SETTING_KEYS.signerPublicKeyHash,
+        label: 'Endereço da chave de pagamento',
+        hint: 'O endereço, no signer, de onde o dinheiro sai. A chave em si nunca chega aqui.',
+        placeholder: 'tz1…',
+      },
+    ],
   },
   {
-    key: SETTING_KEYS.tzktApiUrl,
-    label: 'Endereço da TzKT',
-    hint: 'De onde vêm o ciclo, o split de recompensa e o estado da operação.',
-    placeholder: 'https://api.shadownet.tzkt.io',
-  },
-  {
-    key: SETTING_KEYS.signerUrl,
-    label: 'Endereço do octez-signer',
-    hint: 'Precisa ser https://. Em texto claro, qualquer um no caminho troca os bytes que o signer vai assinar.',
-    placeholder: 'https://192.168.1.10:6732',
-  },
-  {
-    key: SETTING_KEYS.signerPublicKeyHash,
-    label: 'Endereço da chave de pagamento',
-    hint: 'O endereço, no signer, de onde o dinheiro sai. A chave em si nunca chega aqui.',
-    placeholder: 'tz1…',
-  },
-  {
-    key: SETTING_KEYS.feeNumerator,
-    label: 'Comissão — numerador',
-    hint: 'Comissão exata como fração. 5% é 5 sobre 100.',
-    placeholder: '5',
-  },
-  {
-    key: SETTING_KEYS.feeDenominator,
-    label: 'Comissão — denominador',
-    hint: 'Fração, nunca decimal: 5,25% é 525 sobre 10000.',
-    placeholder: '100',
-  },
-  {
-    key: SETTING_KEYS.includeBlockFees,
-    label: 'Incluir taxas de bloco (true/false)',
-    hint: 'Se as taxas das operações que você incluiu nos blocos entram no bolo dos delegadores.',
-    placeholder: 'true',
-  },
-  {
-    key: SETTING_KEYS.payoutFactorNumerator,
-    label: 'Fator de corte K — numerador',
-    hint: 'Só entra no lote quem tem a receber ao menos K vezes o custo da transferência.',
-    placeholder: '3',
-  },
-  {
-    key: SETTING_KEYS.payoutFactorDenominator,
-    label: 'Fator de corte K — denominador',
-    hint: 'K = 3/1 significa pagar quando o devido cobre três vezes a taxa.',
-    placeholder: '1',
-  },
-  {
-    key: SETTING_KEYS.cycleCapMutez,
-    label: 'Teto por ciclo (mutez)',
-    hint: 'Acima disso o motor recusa e chama você. 1 ꜩ = 1000000 mutez.',
-    placeholder: '1000000000',
-  },
-  {
-    key: SETTING_KEYS.maxOwedCycles,
-    label: 'Máximo de ciclos devidos',
-    hint: 'Acima disso a fila para e pergunta, em vez de pagar uma semana de uma vez.',
-    placeholder: '3',
-  },
-  {
-    key: SETTING_KEYS.fromCycle,
-    label: 'Primeiro ciclo desta instalação',
-    hint: 'Sem ele, "todo ciclo não pago" alcançaria o começo da cadeia.',
-    placeholder: '900',
+    title: 'Política',
+    why: 'Quanto você fica, quem é pequeno demais para valer a transferência, e quando o TAPS para e pergunta.',
+    fields: [
+      {
+        key: SETTING_KEYS.feeNumerator,
+        label: 'Comissão — numerador',
+        hint: 'Comissão exata como fração. 5% é 5 sobre 100.',
+        placeholder: '5',
+      },
+      {
+        key: SETTING_KEYS.feeDenominator,
+        label: 'Comissão — denominador',
+        hint: 'Fração, nunca decimal: 5,25% é 525 sobre 10000.',
+        placeholder: '100',
+      },
+      {
+        key: SETTING_KEYS.payoutFactorNumerator,
+        label: 'Fator de corte K — numerador',
+        hint: 'Só entra no lote quem tem a receber ao menos K vezes o custo da transferência.',
+        placeholder: '3',
+      },
+      {
+        key: SETTING_KEYS.payoutFactorDenominator,
+        label: 'Fator de corte K — denominador',
+        hint: 'K = 3/1 significa pagar quando o devido cobre três vezes a taxa.',
+        placeholder: '1',
+      },
+      {
+        key: SETTING_KEYS.includeBlockFees,
+        label: 'Incluir taxas de bloco',
+        hint: 'Se as taxas das operações que você incluiu nos blocos entram no bolo dos delegadores.',
+        choices: [
+          { value: 'true', label: 'Entram no bolo' },
+          { value: 'false', label: 'Ficam com você' },
+        ],
+      },
+      {
+        key: SETTING_KEYS.cycleCapMutez,
+        label: 'Teto por ciclo (mutez)',
+        hint: 'Acima disso o motor recusa e chama você. 1 ꜩ = 1000000 mutez.',
+        placeholder: '1000000000',
+      },
+      {
+        key: SETTING_KEYS.maxOwedCycles,
+        label: 'Máximo de ciclos devidos',
+        hint: 'Acima disso a fila para e pergunta, em vez de pagar uma semana de uma vez.',
+        placeholder: '3',
+      },
+    ],
   },
 ];
 
@@ -277,7 +321,7 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       {saved && <p className="note">Configuração salva.</p>}
 
       <section className="t-card" style={{ marginBottom: 'var(--s-6)' }}>
-        <h2 className="pair__key">Credencial de cliente do octez-signer</h2>
+        <h2 className="card__title">Credencial de cliente do octez-signer</h2>
         <p className="note">
           É com ela que este computador prova ao signer quem está pedindo. Ela não é a chave
           que guarda os fundos — essa fica no host do <code>octez-signer</code> —, mas{' '}
@@ -292,11 +336,12 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
           </span>
         </div>
         {credentialPublicKey && (
-          <div className="pair">
-            <span className="pair__key">Chave pública</span>
-            <span className="pair__value t-address" title={credentialPublicKey}>
-              {credentialPublicKey}
-            </span>
+          /* Esta chave existe para ser comparada, caractere a caractere, com o
+             que o baker autorizou no signer. Encostada na margem direita e
+             quebrando onde calhar, ela é o oposto de conferível. */
+          <div className="pair pair--block">
+            <span className="pair__key">Chave pública — compare com a que você autorizou no signer</span>
+            <span className="pair__value t-address">{credentialPublicKey}</span>
           </div>
         )}
         <p className="note" style={{ marginTop: 'var(--s-3)' }}>
@@ -323,7 +368,7 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
         </div>
       </section>
 
-      <section className="card">
+      <section className="t-card" style={{ marginBottom: 'var(--s-6)' }}>
         <h2 className="card__title">Certificado do signer</h2>
         <div className="pair">
           <span className="pair__key">Estado</span>
@@ -363,23 +408,51 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
         </div>
       </section>
 
-      <div className="grid">
-        {FIELDS.map((field) => (
-          <label key={field.key} className="t-field">
-            <span className="t-field__label">{field.label}</span>
-            <input
-              className="t-field__input"
-              value={values[field.key] ?? ''}
-              placeholder={field.placeholder}
-              spellCheck={false}
-              onChange={(event) =>
-                setValues((current) => ({ ...current, [field.key]: event.target.value }))
-              }
-            />
-            <span className="t-field__hint">{field.hint}</span>
-          </label>
-        ))}
-      </div>
+      {GROUPS.map((group) => (
+        <section className="panel" key={group.title}>
+          <h2 className="panel__title">{group.title}</h2>
+          <p className="panel__why">{group.why}</p>
+          <div className="grid">
+            {group.fields.map((field) =>
+              field.choices ? (
+                <div key={field.key} className="t-field">
+                  <span className="t-field__label">{field.label}</span>
+                  <div className="choice" style={{ padding: 'var(--s-3) 0' }}>
+                    {field.choices.map((choice) => (
+                      <button
+                        key={choice.value}
+                        type="button"
+                        className="choice__option"
+                        aria-pressed={values[field.key] === choice.value}
+                        onClick={() =>
+                          setValues((current) => ({ ...current, [field.key]: choice.value }))
+                        }
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="t-field__hint">{field.hint}</span>
+                </div>
+              ) : (
+                <label key={field.key} className="t-field">
+                  <span className="t-field__label">{field.label}</span>
+                  <input
+                    className="t-field__input"
+                    value={values[field.key] ?? ''}
+                    placeholder={field.placeholder}
+                    spellCheck={false}
+                    onChange={(event) =>
+                      setValues((current) => ({ ...current, [field.key]: event.target.value }))
+                    }
+                  />
+                  <span className="t-field__hint">{field.hint}</span>
+                </label>
+              ),
+            )}
+          </div>
+        </section>
+      ))}
 
       <div className="row" style={{ marginTop: 'var(--s-6)' }}>
         <button type="button" className="t-button" disabled={saving} onClick={save}>

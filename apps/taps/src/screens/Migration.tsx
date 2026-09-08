@@ -4,6 +4,7 @@ import { pickFile } from '../lib/pick';
 import { importLegacyExport, type ImportSummary } from '@tezos-suite/payout-store-sqlite';
 import type { Ready } from '../App';
 import { describe } from '../App';
+import { whenText } from '../lib/format';
 import { Amount } from '../ui/Amount';
 import { Fault } from '../ui/Fault';
 
@@ -82,7 +83,7 @@ export function Migration({ ready, onChanged }: { ready: Ready; onChanged: () =>
       </p>
 
       <section className="t-card" style={{ marginBottom: 'var(--s-6)' }}>
-        <h2 className="pair__key">Como exportar do TAPS antigo</h2>
+        <h2 className="card__title">Como exportar do TAPS antigo</h2>
         <ol className="note">
           <li>Pare o Lucee: <code>sudo /opt/lucee/lucee_ctl stop</code>.</li>
           <li>Abra o console do H2 e conecte em <code>jdbc:h2:[pasta]/database/tapsDB;MODE=MySQL</code>.</li>
@@ -108,7 +109,7 @@ export function Migration({ ready, onChanged }: { ready: Ready; onChanged: () =>
 
       {summary && (
         <section className="t-card">
-          <h2 className="pair__key">Importado</h2>
+          <h2 className="card__title">Importado</h2>
           <div className="pair">
             <span className="pair__key">Bakers</span>
             <span className="pair__value">{summary.bakers.join(', ')}</span>
@@ -143,12 +144,18 @@ export function Migration({ ready, onChanged }: { ready: Ready; onChanged: () =>
 
       {previous.length > 0 && (
         <section className="t-card" style={{ marginTop: 'var(--s-6)' }}>
-          <h2 className="pair__key">Importações anteriores</h2>
+          <h2 className="card__title">Importações anteriores</h2>
           {previous.map((entry) => (
             <div className="pair" key={`${entry.source}-${entry.importedAt}`}>
-              <span className="pair__key">{entry.importedAt}</span>
+              {/* Saía o ISO cru do banco. A data que a pessoa lê é a mesma que
+                  o resto do aplicativo escreve, e o arquivo de origem é o que
+                  identifica a importação — não o carimbo. */}
+              <span className="pair__key">
+                {entry.source}
+                <span className="trail__detail">{whenText(new Date(entry.importedAt))}</span>
+              </span>
               <span className="pair__value">
-                <Amount mutez={entry.totalPaid} />
+                <Amount mutez={entry.totalPaid} /> já pagos
               </span>
             </div>
           ))}

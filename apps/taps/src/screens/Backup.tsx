@@ -213,12 +213,15 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
 
       {candidate && (
         <section
-          className="t-card"
-          role="group"
+          className="confirm"
+          role="alertdialog"
           aria-labelledby="restaurar-confirmacao"
           style={{ marginTop: 'var(--s-6)' }}
         >
-          <h2 id="restaurar-confirmacao" className="pair__key">
+          {/* `alertdialog`, e não `group`: isto interrompe uma jornada para
+              perguntar sobre uma troca que não se desfaz sozinha. O leitor de
+              tela precisa ouvir isso, e o cartão precisa parecer isso. */}
+          <h2 id="restaurar-confirmacao" className="confirm__what">
             Restaurar a partir de {candidate.name}?
           </h2>
           <p className="note">
@@ -287,7 +290,7 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
 
       <div className="grid" style={{ marginTop: 'var(--s-6)' }}>
         <section className="t-card">
-          <h2 className="pair__key">Salvar uma cópia</h2>
+          <h2 className="card__title">Salvar uma cópia</h2>
           <p className="note">
             Pode fazer com o TAPS aberto. A cópia sai inteira, mesmo no meio de um ciclo.
           </p>
@@ -299,7 +302,7 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
         </section>
 
         <section className="t-card">
-          <h2 className="pair__key">Restaurar de uma cópia</h2>
+          <h2 className="card__title">Restaurar de uma cópia</h2>
           <p className="note">
             O arquivo é conferido antes de qualquer coisa ser trocada, e o TAPS mostra quantos
             ciclos ele tem e pergunta antes de trocar. O banco de agora é renomeado ao lado,
@@ -318,7 +321,7 @@ export function Backup({ ready, onChanged }: { ready: Ready; onChanged: () => vo
         </section>
 
         <section className="t-card">
-          <h2 className="pair__key">O que NÃO está no backup</h2>
+          <h2 className="card__title">O que NÃO está no backup</h2>
           <p className="note">
             A credencial de cliente do <code>octez-signer</code> fica no cofre do sistema
             operacional, não no banco. Restaurar noutra máquina exige cadastrá-la de novo — e
