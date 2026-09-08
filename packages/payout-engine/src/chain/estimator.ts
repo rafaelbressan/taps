@@ -2,6 +2,7 @@ import type { TezosToolkit } from '@taquito/taquito';
 import {
   InvariantViolationError,
   estimateTransfers,
+  type EstimatedBatch,
   type EstimatedTransfer,
   type Mutez,
   type ProtocolConstants,
@@ -87,12 +88,18 @@ export function createChunkedEstimator(
   const probeCeiling = Number(simulationBudget(constants, options.sourceBalanceMutez));
   const probeSize = Math.max(1, Math.min(options.probeSize ?? 10, probeCeiling));
 
-  return async (recipients: readonly Recipient[]): Promise<EstimatedTransfer[]> => {
-    if (recipients.length === 0) return [];
+  return async (recipients: readonly Recipient[]): Promise<EstimatedBatch> => {
+    if (recipients.length === 0) return { transfers: [], reveal: null };
 
-    const probe = await estimateTransfers(tezos, recipients.slice(0, probeSize), {
+    const probed = await estimateTransfers(tezos, recipients.slice(0, probeSize), {
       gasBufferPercent: options.gasBufferPercent,
     });
+    const probe = probed.transfers;
+    // Every chunk is simulated against the same still-unrevealed account, so
+    // every chunk comes back with a reveal of its own. There is one account
+    // and one reveal: the first answer is kept and the rest are the same fact
+    // repeated (BRES-137).
+    const reveal = probed.reveal;
     const worstGas = probe.reduce((max, t) => (t.gasLimit > max ? t.gasLimit : max), 1n);
     const byGas = gasBudget / worstGas;
     const perChunk = Number(
@@ -110,11 +117,10 @@ export function createChunkedEstimator(
     const estimates: EstimatedTransfer[] = [...probe];
     for (let start = probe.length; start < recipients.length; start += perChunk) {
       const chunk = recipients.slice(start, start + perChunk);
-      estimates.push(
-        ...(await estimateTransfers(tezos, chunk, {
-          gasBufferPercent: options.gasBufferPercent,
-        })),
-      );
+      const chunked = await estimateTransfers(tezos, chunk, {
+        gasBufferPercent: options.gasBufferPercent,
+      });
+      estimates.push(...chunked.transfers);
     }
 
     if (estimates.length !== recipients.length) {
@@ -123,6 +129,6 @@ export function createChunkedEstimator(
         `asked for ${recipients.length}, produced ${estimates.length}`,
       );
     }
-    return estimates;
+    return { transfers: estimates, reveal };
   };
 }

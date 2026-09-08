@@ -2,7 +2,7 @@ import { InvariantViolationError } from '../errors';
 import type { Mutez } from '../mutez';
 import { sumMutez } from '../mutez';
 import type { ProtocolConstants } from '../rpc/protocol-constants';
-import type { EstimatedTransfer } from './estimate';
+import type { EstimatedTransfer, RevealCost } from './estimate';
 
 /**
  * Batch sizing.
@@ -44,6 +44,15 @@ export interface PlanBatchesOptions {
   readonly blockGasUtilisationPercent?: number;
   /** Optional hard cap on operations per batch, for operational reasons. */
   readonly maxOperationsPerBatch?: number;
+  /**
+   * The reveal the paying account still owes, when it owes one.
+   *
+   * It is not a transfer and it is not in any batch — it is injected on its
+   * own, before them. It is here because its fee comes out of the same
+   * balance, and a `totalCost` that ignores it lets `assertBalanceCovers`
+   * pass on a balance that cannot actually pay (BRES-137).
+   */
+  readonly reveal?: RevealCost | null;
 }
 
 export function planBatches(
@@ -111,9 +120,10 @@ export function planBatches(
 
   return {
     batches,
-    totalCost: sumMutez(
-      batches.map((batch) => batch.totalAmount + batch.totalFees + batch.totalBurn),
-    ),
+    totalCost:
+      sumMutez(
+        batches.map((batch) => batch.totalAmount + batch.totalFees + batch.totalBurn),
+      ) + (options.reveal?.feeMutez ?? 0n),
   };
 }
 

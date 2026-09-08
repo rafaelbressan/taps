@@ -19,6 +19,28 @@ export interface TransactionContent {
   readonly destination: string;
 }
 
+/**
+ * Publishing the paying account's public key. Once per account, ever.
+ *
+ * It is deliberately NOT part of a payout batch. The batch's operation hash
+ * is written to the store before the operation exists, and that is what makes
+ * a retry safe; a resumed run rebuilds the batch from the store, where no
+ * estimate is available, so a batch that carried a reveal could not be
+ * rebuilt byte-for-byte. Keeping the reveal outside leaves the payout bytes
+ * identical on every attempt (BRES-137).
+ */
+export interface RevealContent {
+  readonly kind: 'reveal';
+  readonly source: string;
+  readonly fee: string;
+  readonly counter: string;
+  readonly gas_limit: string;
+  readonly storage_limit: string;
+  readonly public_key: string;
+}
+
+export type OperationContent = RevealContent | TransactionContent;
+
 export interface HeadRef {
   readonly hash: string;
   readonly level: number;
@@ -31,13 +53,18 @@ export interface PayoutRpc {
   getCounter(address: string): Promise<bigint>;
   getBalance(address: string): Promise<Mutez>;
   /**
+   * The account's published public key, or `null` when it never published
+   * one. `null` is the whole reason a first payout needs a reveal.
+   */
+  getManagerKey(address: string): Promise<string | null>;
+  /**
    * Dry run against the node. Moves nothing; it is the last chance to see a
    * `backtracked` batch before the money leaves.
    */
   preapply(input: {
     readonly protocol: string;
     readonly branch: string;
-    readonly contents: readonly TransactionContent[];
+    readonly contents: readonly OperationContent[];
     readonly signature: string;
   }): Promise<unknown>;
   injectOperation(signedBytesHex: string): Promise<string>;
@@ -47,11 +74,15 @@ export interface PayoutRpc {
  * The public key the chain checks this account's signatures against, or
  * `null` when the account has never been revealed.
  *
- * A port of its own, deliberately not part of `PayoutRpc`: no step of the
- * money path reads it. It exists for the estimation boundary, which has to
- * hand Taquito a public key and must get it from the chain rather than from
- * the signer — the chain is the only thing that decides whether a signature
- * from this account will be accepted at all.
+ * A narrow port for the estimation boundary, which has to hand Taquito a
+ * public key and must get it from the chain rather than from the signer —
+ * the chain is the only thing that decides whether a signature from this
+ * account will be accepted at all.
+ *
+ * It used to say that no step of the money path reads this. That stopped
+ * being true when the injector started revealing the account it is about to
+ * spend from (BRES-137), so `PayoutRpc` declares it too and this stays as
+ * the smaller port for the side that only ever reads.
  */
 export interface ManagerKeySource {
   getManagerKey(address: string): Promise<string | null>;

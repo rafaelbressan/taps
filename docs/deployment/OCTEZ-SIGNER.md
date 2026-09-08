@@ -259,6 +259,45 @@ tenha rodado, alguém está com a credencial de cliente.
 
 ---
 
+## Trocar a folha quando ela vencer
+
+A folha vale um ano; a autoridade, dez. Quase sempre o que vence é a folha, e
+então **nada precisa ser reimportado no TAPS**: ele confia na CA, e a folha
+nova é assinada pela mesma. **A chave de pagamento não é tocada** — continua no
+volume, cifrada, com a mesma senha.
+
+No host do signer:
+
+```bash
+cd ~/taps-signer
+
+# Folha nova, assinada pela MESMA ca.crt do Passo 3.
+openssl req -newkey rsa:2048 -nodes -keyout tls.key.novo -out tls.csr \
+  -subj "/CN=taps-signer"
+
+openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out tls.crt.novo -days 365 \
+  -extfile <(printf 'subjectAltName=IP:192.168.1.20,DNS:taps-signer\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth')
+
+mv tls.crt.novo tls.crt && mv tls.key.novo tls.key && rm tls.csr
+docker rm -f taps-signer
+docker start -ai taps-signer   # ou o `docker run` do Passo 4
+```
+
+É aqui que guardar a `ca.key` fora do host se paga: sem ela não dá para emitir
+a folha nova. Se você a apagou, refaça o Passo 3 inteiro e **reimporte o
+`ca.crt` novo no TAPS**, conferindo a impressão digital.
+
+**O daemon vai pedir a senha da chave outra vez**, como em qualquer reinício —
+trocar certificado não é exceção. Deixe o `tmux` aberto.
+
+Enquanto a CA no TAPS não corresponder ao que o signer apresenta, o TAPS recusa
+a conexão e diz isso. É o comportamento certo, não uma falha: nesse intervalo
+ele realmente não sabe se está falando com o seu signer. Nenhum pagamento se
+perde — a fila espera e tenta de novo.
+
+---
+
 ## Atualizar
 
 O signer é um daemon de segurança: vale atualizar quando sair versão nova do

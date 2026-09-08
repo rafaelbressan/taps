@@ -70,9 +70,8 @@ describe('the estimation signer refuses what it must refuse', () => {
     const { publicKeyHash } = keyPair(4);
     const signer = new EstimationSigner(publicKeyHash, new FakeChain(null));
 
-    // Não é um detalhe de estimativa: uma conta sem `manager_key` não emite
-    // operação nenhuma, e o injetor forja só transação — um reveal planejado
-    // aqui nunca seria injetado.
+    // Sem `manager_key` e sem signer para perguntar, ninguém sabe com que
+    // chave esta conta assina — e aí não há operação nenhuma para montar.
     await expect(signer.publicKey()).rejects.toBeInstanceOf(PayoutAccountNotRevealedError);
   });
 
@@ -151,4 +150,67 @@ describe('manager_key, lido do nó', () => {
       );
     },
   );
+});
+
+/**
+ * A conta que ainda não foi revelada (BRES-137).
+ *
+ * A cadeia não tem o que responder sobre uma conta que nunca assinou, e é
+ * exatamente o estado de toda chave de pagamento no dia em que ela nasce.
+ * O signer é o único lugar onde a chave existe — e é por isso que o que ele
+ * responde passa pela mesma conferência que a resposta da cadeia.
+ */
+describe('antes da primeira revelação, a chave pública vem do signer', () => {
+  it('pergunta ao signer só quando a cadeia não tem nada', async () => {
+    const { publicKey, publicKeyHash } = keyPair(11);
+    const chain = new FakeChain(publicKey);
+    let askedSigner = 0;
+    const signer = new EstimationSigner(publicKeyHash, chain, {
+      publicKey: async () => {
+        askedSigner += 1;
+        return publicKey;
+      },
+    });
+
+    await expect(signer.publicKey()).resolves.toBe(publicKey);
+    // A cadeia respondeu, então o signer não foi incomodado.
+    expect(askedSigner).toBe(0);
+  });
+
+  it('usa a do signer quando a cadeia responde null', async () => {
+    const { publicKey, publicKeyHash } = keyPair(12);
+    const signer = new EstimationSigner(publicKeyHash, new FakeChain(null), {
+      publicKey: async () => publicKey,
+    });
+
+    await expect(signer.publicKey()).resolves.toBe(publicKey);
+  });
+
+  it('confere que a chave do signer é a da conta configurada', async () => {
+    const { publicKeyHash } = keyPair(13);
+    const outra = keyPair(14);
+    const signer = new EstimationSigner(publicKeyHash, new FakeChain(null), {
+      publicKey: async () => outra.publicKey,
+    });
+
+    // Uma chave que não bate com o endereço é de outra conta. Vale mais aqui
+    // do que quando vem da cadeia: aqui não há um bloco por trás dela.
+    await expect(signer.publicKey()).rejects.toThrow(/hashes to/);
+  });
+
+  it('não guarda a chave emprestada — a cadeia volta a mandar quando revela', async () => {
+    const { publicKey, publicKeyHash } = keyPair(15);
+    let onChain: string | null = null;
+    const chain: ManagerKeySource = { getManagerKey: async () => onChain };
+    const signer = new EstimationSigner(publicKeyHash, chain, {
+      publicKey: async () => publicKey,
+    });
+
+    await expect(signer.publicKey()).resolves.toBe(publicKey);
+    onChain = publicKey;
+    await expect(signer.publicKey()).resolves.toBe(publicKey);
+    // E só a partir daí o valor é guardado.
+    onChain = null;
+    await expect(signer.publicKey()).resolves.toBe(publicKey);
+  });
 });

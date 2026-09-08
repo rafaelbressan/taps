@@ -57,6 +57,31 @@ fn issue() -> Pki {
     }
 }
 
+/// O certificado que o `openssl req -x509` do runbook ANTIGO produzia:
+/// auto-assinado e marcado `CA:TRUE`, servido como certificado do servidor.
+///
+/// Existe porque foi o que custou um dia de investigação (BRES-137). O
+/// `curl` aceita, então o teste de mesa passava; o rustls recusa com
+/// `CaUsedAsEndEntity`, e a mensagem antiga culpava o daemon por isso.
+fn issue_ca_used_as_leaf() -> Pki {
+    let mut params = CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("parâmetros");
+    params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.subject_alt_names = vec![SanType::IpAddress(std::net::IpAddr::from([127, 0, 0, 1]))];
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "taps-signer");
+    let key = KeyPair::generate().expect("chave");
+    let cert = params.self_signed(&key).expect("auto-assinado CA:TRUE");
+    let pem = cert.pem();
+
+    // Fixado e servido são o mesmo arquivo: é o que o runbook mandava fazer.
+    Pki {
+        ca_pem: pem.clone(),
+        leaf_pem: pem,
+        leaf_key_pem: key.serialize_pem(),
+    }
+}
+
 /// Um servidor TLS que responde uma vez e morre. Devolve a porta.
 async fn serve_once(pki: &Pki, body: &'static str) -> u16 {
     let certs = rustls_pemfile_certs(&pki.leaf_pem);
@@ -284,4 +309,34 @@ fn sem_comentarios(fonte: &str) -> String {
         saida.push_str(&resto[..inicio]);
         resto = &resto[fim..];
     }
+}
+
+/// O certificado do runbook antigo, fixado e servido (BRES-137).
+///
+/// Importar não basta e instalar no truststore do sistema também não: o
+/// rustls recusa um certificado de autoridade usado como certificado de
+/// servidor, venha ele de onde vier. O `curl` aceita — por isso o teste de
+/// mesa passava e o pagamento não. Sem este caso, um `openssl req -x509`
+/// sozinho volta ao guia sem ninguém notar.
+#[tokio::test]
+async fn um_certificado_ca_true_e_recusado_com_o_que_fazer() {
+    let pki = issue_ca_used_as_leaf();
+    let port = serve_once(&pki, "{}").await;
+
+    let error = taps_lib::signer::call(
+        &format!("https://127.0.0.1:{port}"),
+        Some(&pki.ca_pem),
+        "GET",
+        "/keys/tz1fakefakefakefakefakefakefakcRHqXV",
+        None,
+    )
+    .await
+    .expect_err("um CA:TRUE servido como folha não pode conectar");
+
+    // A mensagem tem de mandar refazer o certificado, não conferir o daemon:
+    // o daemon é a única coisa que estava certa.
+    assert!(
+        error.contains("CA como certificado de servidor") && error.contains("Passo 3"),
+        "o erro tem de explicar o que refazer, e disse: {error}"
+    );
 }
