@@ -108,7 +108,10 @@ body {
 /* `min-width: 0` porque item de flex não encolhe abaixo do próprio conteúdo
    por padrão: era assim que `não iniciado` saía pela borda do cartão
    Agendador na largura padrão de 1180 px. */
-.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); min-width: 0; }
+/* O rótulo nunca encolhe: com `min-width: 0` nele, um caminho longo de banco
+   espremia "Banco" até encostar no valor, e a linha saía "BancoC:\Users\…".
+   Quem tem de ceder é o valor. */
+.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); flex: 0 0 auto; }
 .pair__value {
   font-family: var(--f-data);
   text-align: right;
