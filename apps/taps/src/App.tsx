@@ -45,6 +45,7 @@ interface AppStatus {
   readonly signer_credential_present: boolean;
   /** O `edpk` da credencial guardada. Público — a chave privada não sai do Rust. */
   readonly signer_credential_public_key: string | null;
+  readonly signer_tls_ca_present: boolean;
   readonly platform: string;
   readonly version: string;
 }
