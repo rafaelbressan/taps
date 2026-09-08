@@ -176,10 +176,27 @@ export async function tzktSplit(
         `montar o batch aqui pagaria a mais para os listados e zero para o resto.`,
     );
   }
-  if (delegators.length !== head.delegatorsCount) {
-    throw new Error(
-      `delegatorsCount = ${head.delegatorsCount} mas foram lidos ${delegators.length} delegadores.`,
-    );
+  // `delegatorsCount` NÃO se compara com `delegators.length`. O contador da TzKT é
+  // desnormalizado e fica ABAIXO da lista que acompanha, com os saldos exatos. Medido na
+  // mainnet em 08/09/2026, 25 maiores bakers nos ciclos 1340–1346: 15 de 125 pares
+  // baker-ciclo listaram mais linhas do que contaram (+1 ou +2), nunca menos, e em todos
+  // a soma de saldos fechou no mutez. Não é atraso de liquidação: o ciclo 1346 fechou
+  // enquanto o 1345 ainda divergia, e o 1340 ainda diverge. Esperar o contador alinhar é
+  // nunca pagar o ciclo. Quem prova a lista inteira é a soma, acima.
+  //
+  // No lugar dele, a checagem que o contador nunca deu: endereço repetido. Paginar por
+  // `offset` sobre uma lista que se move serve o mesmo delegador duas vezes, e duas
+  // linhas iguais viram duas transferências para a mesma pessoa no mesmo lote.
+  const vistos = new Set<string>();
+  for (const d of delegators) {
+    if (vistos.has(d.address)) {
+      throw new Error(
+        `${d.address} aparece mais de uma vez nas ${delegators.length} linhas de ` +
+          `${baker}/${cycle}: a paginação serviu o mesmo delegador duas vezes e o lote ` +
+          `pagaria duas vezes.`,
+      );
+    }
+    vistos.add(d.address);
   }
 
   return {

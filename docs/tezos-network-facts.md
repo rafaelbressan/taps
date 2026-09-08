@@ -267,8 +267,31 @@ Em um baker grande, `limit=10000` **não basta**. Everstake, ciclo 1336:
 `delegatorsCount = 60258`, uma página traz 10 000. Percorrendo com `offset`:
 
 ```
-offset=0 → 10000 … offset=60000 → 258   total 60258   ✅ == delegatorsCount
+offset=0 → 10000 … offset=60000 → 258   total 60258
 ```
+
+**`delegatorsCount` não é a conferência.** O contador é desnormalizado e fica *abaixo* da
+lista que acompanha, com os saldos exatos. Medido em 08/09/2026 nos 25 maiores bakers,
+ciclos 1340–1346: **15 de 125** pares baker-ciclo listaram mais linhas do que contaram
+(+1 ou +2), nunca menos, e em todos a soma de saldos fechou no mutez.
+
+| baker | ciclo | linhas | `delegatorsCount` | Σ saldos fecha? |
+|---|---:|---:|---:|---|
+| Everstake `tz1aRoaR…` | 1345 | 60 253 | 60 252 | sim |
+| Everstake `tz1aRoaR…` | 1346 | 60 255 | 60 255 | sim |
+| `tz3LV9aGKHDn…` | 1344–1346 | 5 218 | 5 217 | sim |
+| `tz1bHKi24yP4…` | 1340 | 1 839 | 1 837 | sim |
+
+Duas dessas linhas matam as duas regras mais tentadoras. Em Everstake/1345 a linha
+excedente é `tz1bmU7gcZ38YVAUqFRzn3WrRnU5Qv1e97Ba`, com `delegatedBalance: 0` e
+100 011 980 mutez em stake — primeiro ciclo dela stakeando com o baker, listada e não
+contada. Como vale 0 mutez, "aceite a diferença até o número de linhas com saldo zero"
+parece certo — até `tz3LV9aGKHDn…`, que tem uma linha a mais **sem nenhuma linha de saldo
+zero na lista** e a soma ainda exata.
+
+Também não é atraso de liquidação: o ciclo 1346 fechou enquanto o 1345 ainda divergia, e
+o 1340 ainda diverge hoje. Um motor que espera o contador alinhar **nunca paga aquele
+ciclo** — e o ciclo que o TAPS paga é `head.cycle − 2`, exatamente o que diverge.
 
 ### 2.6 A validação que consegue reprovar
 
@@ -287,6 +310,11 @@ Este invariante fecha **exatamente** quando a lista está completa, e **falha** 
 Com a lista truncada não há erro nenhum: o pagamento simplesmente **paga a mais** para os 10 000
 listados e **paga zero** para os outros 50 258. Rode esse invariante antes de montar qualquer batch;
 se falhar, aborte.
+
+A segunda validação que reprova é **endereço repetido**: paginar por `offset` sobre uma lista
+que se move pode servir o mesmo delegador duas vezes, e duas linhas iguais viram duas
+transferências para a mesma pessoa no mesmo lote. Medida hoje a lista não tem repetição
+nenhuma; é justamente por isso que a checagem é barata e vale a pena.
 
 Outra checagem viva, no mesmo espírito:
 

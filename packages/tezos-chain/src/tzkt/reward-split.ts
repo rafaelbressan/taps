@@ -243,12 +243,50 @@ export async function fetchRewardSplit(
 }
 
 /**
+ * How far `delegatorsCount` is from the number of rows actually listed.
+ *
+ * Reported, never fatal. See `assertDelegatorListComplete` for why.
+ */
+export function delegatorCountDrift(split: RewardSplit): number {
+  return split.delegators.length - split.delegatorsCount;
+}
+
+/**
  * The check that can actually fail.
  *
  * The sum of the listed delegator balances equals `externalDelegatedBalance`
  * exactly when the list is complete, and does not when it is truncated. With
  * a truncated list there is no error anywhere else: the distribution simply
- * overpays whoever was listed and pays nothing to whoever was not.
+ * overpays whoever was listed and pays nothing to whoever was not. That sum
+ * is the invariant, and it aborts.
+ *
+ * `delegatorsCount` is NOT part of it, and comparing it to `delegators.length`
+ * is what this function used to do. TzKT's counter is denormalised and drifts
+ * below the list it accompanies while the balances stay exact. Measured
+ * 2026-09-08 on mainnet, top 25 bakers across cycles 1340–1346: 15 of 125
+ * baker-cycles listed more rows than counted, the drift always +1 or +2,
+ * never negative, and the balance sum closed to the mutez in every one.
+ *
+ * Two of those cases rule out the two tempting narrower rules:
+ *
+ *   Everstake, cycle 1345 — 60 253 rows, `delegatorsCount` 60 252. The
+ *   surplus row is `tz1bmU7gcZ38YVAUqFRzn3WrRnU5Qv1e97Ba`, `delegatedBalance`
+ *   0 with 100 011 980 mutez staked: its first cycle staking with the baker,
+ *   listed and not counted. A zero-balance row is worth zero, so "accept the
+ *   drift up to the number of zero-balance rows" looks right — and then
+ *
+ *   `tz3LV9aGKHDnAZHCtC9SjNtTrKRu678FqSki`, cycles 1344 to 1346 — one row
+ *   over the count with NO zero-balance row anywhere in the list, sum still
+ *   exact. The surplus row carries money and the counter is simply wrong.
+ *
+ * Nor does it settle with time, which is the other thing one would try:
+ * cycle 1346 closed while 1345 still drifted, and cycle 1340 still drifts
+ * today. An engine that waits for the counter to agree never pays that cycle.
+ *
+ * What replaces it is a check the counter never gave: a repeated address.
+ * `offset` paging over a list that moves can serve the same delegator twice,
+ * and a duplicate is a second transfer to the same person in the same batch.
+ * That one aborts.
  *
  * Run this before building any batch. If it fails, abort.
  */
@@ -263,11 +301,18 @@ export function assertDelegatorListComplete(split: RewardSplit): void {
         `(${missing} mutez unaccounted for) — the delegator list is truncated`,
     );
   }
-  if (split.delegators.length !== split.delegatorsCount) {
-    throw new InvariantViolationError(
-      'delegators.length == delegatorsCount',
-      `${split.baker} cycle ${split.cycle}: got ${split.delegators.length} of ${split.delegatorsCount}`,
-    );
+
+  const seen = new Set<string>();
+  for (const delegator of split.delegators) {
+    if (seen.has(delegator.address)) {
+      throw new InvariantViolationError(
+        'delegators[] lists each address once',
+        `${split.baker} cycle ${split.cycle}: ${delegator.address} appears more than once ` +
+          `in ${split.delegators.length} rows — paging served it twice and the batch would ` +
+          `pay it twice`,
+      );
+    }
+    seen.add(delegator.address);
   }
 }
 
