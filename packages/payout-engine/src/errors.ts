@@ -290,3 +290,52 @@ export class SettlementWindowError extends PayoutEngineError {
     );
   }
 }
+
+/**
+ * The estimation toolkit was asked for a signature.
+ *
+ * Estimation is a node simulation: Taquito forges the batch and sends it to
+ * `run_operation` under a stub signature, so nothing on that path ever needs
+ * a real one. The only signature this system produces is
+ * `OctezRemoteSigner.signOperation` — `0x03 || forged bytes`, over TLS, to a
+ * signer started with `--magic-bytes 0x03` — and it is asked for by
+ * `RpcBatchInjector` after the forged bytes have been parsed back and checked
+ * against the plan.
+ *
+ * So this error is not a missing feature. It is the boundary saying that a
+ * caller reached a signing capability from the side of the code that is not
+ * allowed to move money, and the fix is to route through the injector, never
+ * to teach this signer to sign.
+ */
+export class EstimationSignerCannotSignError extends PayoutEngineError {
+  constructor(readonly operation: 'sign' | 'secretKey' | 'provePossession') {
+    super(
+      `the estimation path called ${operation}() — it has no signing capability and will ` +
+        'never get one: estimation is simulated under a stub signature, and the only real ' +
+        'signature in this system is asked for by RpcBatchInjector, over bytes it forged ' +
+        'and parsed back',
+    );
+  }
+}
+
+/**
+ * The payout account has no `manager_key` on chain.
+ *
+ * An implicit account that has never been revealed cannot emit a transaction
+ * at all, so no cycle can be paid from it. TAPS refuses here instead of
+ * letting Taquito prepend a reveal of its own accord, for two reasons: the
+ * injector forges transactions only, so a reveal planned during estimation
+ * would never be injected and every fee would be wrong; and revealing
+ * publishes the payout public key, which is a one-time act by the operator,
+ * not something a scheduler decides at 3am.
+ */
+export class PayoutAccountNotRevealedError extends PayoutEngineError {
+  constructor(readonly publicKeyHash: string) {
+    super(
+      `${publicKeyHash} has no manager_key on chain — the payout account was never ` +
+        'revealed and cannot emit any operation. Reveal it once from the signer host ' +
+        '(octez-client, against the same remote key) and fund it; TAPS will not add a ' +
+        'reveal to a payout batch on its own',
+    );
+  }
+}

@@ -14,6 +14,7 @@ import {
 } from '@tezos-suite/chain';
 import {
   CycleQueue,
+  EstimationSigner,
   HttpPayoutRpc,
   OctezRemoteSigner,
   PayoutEngine,
@@ -171,12 +172,26 @@ export async function buildRuntime(
   const loadSplit = async (bakerId: string, cycle: number): Promise<RewardSplit> =>
     fetchRewardSplit(tzkt, bakerId, cycle);
 
+  // O signer da estimativa. Ele NÃO é o `signer` acima, e essa é a correção
+  // do BRES-133: o `TezosToolkit` subia sem signer nenhum, e o `NoopSigner`
+  // padrão do Taquito derrubava todo ciclo com "No signer has been
+  // configured" — depois da fila, do split e do plano, sempre no mesmo ponto.
+  //
+  // Entregar o signer remoto ao toolkit teria consertado o erro e aberto uma
+  // porta: o lado que só planeja passaria a ter capacidade de gastar, a um
+  // `send()` de distância de um lote que nunca passou pela conferência de
+  // bytes do `RpcBatchInjector`. `EstimationSigner` dá ao Taquito as duas
+  // leituras que a simulação usa — endereço e chave pública — e recusa
+  // assinar. A assinatura de verdade continua saindo de um lugar só.
+  const estimationSigner = new EstimationSigner(settings.signerPublicKeyHash, rpc);
+
   const estimate: EstimateTransfers = async (recipients) => {
     // O Taquito também sai pelo Rust: com `connect-src 'self'`, um cliente HTTP
     // próprio quebraria na primeira estimativa.
     const toolkit = new TezosToolkit(
       new RpcClient(settings.rpcUrl, 'main', new TauriHttpBackend()),
     );
+    toolkit.setProvider({ signer: estimationSigner });
     const chainConstants = await constants();
     const balance = await rpc.getBalance(settings.signerPublicKeyHash);
     const estimator = createChunkedEstimator(toolkit, chainConstants, {

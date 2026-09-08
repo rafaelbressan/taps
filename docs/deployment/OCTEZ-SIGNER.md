@@ -80,6 +80,32 @@ Hash: tz1P3fJFGgbGnBNeZeSfHz5NEFzFe2aRqZBv     ← anote: é o "endereço da cha
 
 Esse endereço precisa ter saldo: é dele que os pagamentos saem.
 
+### E precisa estar **revelado** na cadeia
+
+Uma conta nova do Tezos não consegue enviar nada até que a chave pública dela
+tenha sido publicada — o "reveal". É uma vez na vida da chave, e o TAPS não faz
+isso por você: revelar publica a chave pública de pagamento, e essa é uma ação
+sua, não de um agendador rodando às 3 da manhã.
+
+Mande saldo para o endereço primeiro. Depois, no host do signer:
+
+```bash
+docker run --rm -it -v ~/taps-signer/data:/data --entrypoint octez-client \
+  tezos/tezos:latest --endpoint <URL-DO-SEU-NÓ> -d /data reveal key for payout
+```
+
+Ele vai pedir a senha da chave. Se você já tiver enviado qualquer transferência
+a partir desse endereço por outro caminho, ele já está revelado e o comando vai
+dizer isso.
+
+Para conferir, o endereço no explorador de blocos mostra a chave pública, ou:
+
+```bash
+curl -s <URL-DO-SEU-NÓ>/chains/main/blocks/head/context/contracts/<tz1-do-payout>/manager_key
+```
+
+`null` é conta não revelada. Um `edpk…` é conta pronta.
+
 ## Passo 2 — Crie a credencial de cliente
 
 O signer vai rodar recusando qualquer pedido que não venha assinado por uma
@@ -232,6 +258,7 @@ diferente de onde você guarda a senha.
 | erro de certificado | o TLS venceu, ou o endereço que o TAPS usa não está no `subjectAltName` |
 | "o signer recusou o pedido" | a credencial de cliente não foi autorizada, ou foi trocada |
 | "não há credencial de cliente guardada nesta máquina" | o cofre do sistema não tem a chave — reimporte pela Configuração |
+| "the payout account was never revealed" | falta o reveal do Passo 1 — mande saldo e revele antes do primeiro ciclo |
 
 ---
 
