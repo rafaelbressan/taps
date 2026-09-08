@@ -127,8 +127,19 @@ body {
 
 .pair { display: flex; justify-content: space-between; gap: var(--s-4); padding: var(--s-2) 0; }
 .pair + .pair { border-top: 1px solid var(--c-hairline); }
-.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); }
-.pair__value { font-family: var(--f-data); text-align: right; }
+/* `min-width: 0` porque item de flex não encolhe abaixo do próprio conteúdo
+   por padrão: era assim que `não iniciado` saía pela borda do cartão
+   Agendador na largura padrão de 1180 px. */
+/* O rótulo nunca encolhe: com `min-width: 0` nele, um caminho longo de banco
+   espremia "Banco" até encostar no valor, e a linha saía "BancoC:\Users\…".
+   Quem tem de ceder é o valor. */
+.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); flex: 0 0 auto; }
+.pair__value {
+  font-family: var(--f-data);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* Caminho de arquivo e chave pública: são para conferir, não para caber. Quebram
    à esquerda, em bloco, e não empurrados contra a margem direita. */
@@ -301,6 +312,10 @@ body {
   margin-top: var(--s-1);
   max-width: 40ch;
 }
+
+/* O motivo de uma linha que NÃO deu certo. Steel diz "isto é secundário", e o
+   motivo de uma recusa não é secundário: é a razão de o pagamento ter parado. */
+.trail__detail--bad { color: var(--c-negative); }
 
 /* Cabeçalho do relatório: o número do ciclo e o estado dele lado a lado, e
    não como mais uma linha de par entre outras cinco. */

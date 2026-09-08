@@ -99,7 +99,17 @@ export function Trail({ ready, settings }: { ready: Ready; settings: TapsSetting
                     {/* O motivo saía só no `title`. Numa trilha de auditoria a
                         razão de uma recusa é a célula que importa, e ela não
                         pode depender de o baker passar o mouse por cima. */}
-                    {event.detail && <span className="trail__detail">{event.detail}</span>}
+                    {event.detail && (
+                      <span
+                        className={
+                          event.outcome === 'ok'
+                            ? 'trail__detail'
+                            : 'trail__detail trail__detail--bad'
+                        }
+                      >
+                        {event.detail}
+                      </span>
+                    )}
                   </td>
                   <td>{event.actor}</td>
                   <td>{outcomeText(event.outcome)}</td>

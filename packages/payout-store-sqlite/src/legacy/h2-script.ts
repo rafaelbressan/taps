@@ -45,7 +45,10 @@ export interface LegacyRow {
  * INSERT" sobre um arquivo perfeitamente válido.
  */
 const INSERT =
-  /INSERT\s+INTO\s+(?:"?[A-Za-z0-9_]+"?\s*\.\s*)?"?([A-Za-z0-9_]+)"?\s*(?:\(([^)]*)\)\s*)?VALUES/giu;
+  /INSERT\s+INTO\s+(?:"?[A-Za-z0-9_]+"?\s*\.\s*)?"?([A-Za-z0-9_]+)"?\s*(?:\(([^)]*)\)\s*)?VALUES/iuy;
+
+/** As duas palavras que abrem o comando, sem exigir nada do resto dele. */
+const INSERT_WORD = /INSERT\s+INTO\b/iuy;
 
 /** `CREATE [CACHED|MEMORY] TABLE [schema.]tabela(` — onde a ordem das colunas está. */
 const CREATE =
@@ -142,6 +145,114 @@ function splitTopLevel(body: string): string[] {
 }
 
 /**
+ * Onde começa cada `INSERT INTO` do arquivo, ignorando os que estão dentro de
+ * um texto ou de um comentário.
+ *
+ * Existe porque procurar o cabeçalho inteiro com uma varredura global tem um
+ * modo de falhar silencioso: o `INSERT` que a expressão não reconhece não dá
+ * erro, ele simplesmente não é encontrado, e some com ele um ciclo de
+ * pagamento. Achar primeiro *onde* cada comando está, e só depois exigir que
+ * ele case, transforma esse silêncio em uma recusa com o trecho na mão.
+ *
+ * Um nome de delegador pode conter a palavra: `'INSERT INTO'` entre aspas é
+ * um valor, não um comando, e por isso a varredura pula o que está citado.
+ */
+export function findInsertStatements(text: string): number[] {
+  const starts: number[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const char = text[cursor]!;
+    if (char === "'" || char === '"') {
+      cursor = skipQuoted(text, cursor);
+      continue;
+    }
+    if (text.startsWith('--', cursor)) {
+      const end = text.indexOf('\n', cursor);
+      cursor = end === -1 ? text.length : end + 1;
+      continue;
+    }
+    if (text.startsWith('/*', cursor)) {
+      const end = text.indexOf('*/', cursor + 2);
+      cursor = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    if (char === 'I' || char === 'i') {
+      INSERT_WORD.lastIndex = cursor;
+      if (INSERT_WORD.test(text)) {
+        starts.push(cursor);
+        cursor = INSERT_WORD.lastIndex;
+        continue;
+      }
+    }
+    cursor += 1;
+  }
+
+  return starts;
+}
+
+/** O índice logo depois da aspa que fecha a que está em `open`. */
+function skipQuoted(text: string, open: number): number {
+  const quote = text[open]!;
+  let cursor = open + 1;
+  while (cursor < text.length) {
+    if (text[cursor] === quote) {
+      // `''` dentro de um texto é uma aspa, não o fim dele.
+      if (text[cursor + 1] === quote) {
+        cursor += 2;
+        continue;
+      }
+      return cursor + 1;
+    }
+    cursor += 1;
+  }
+  return text.length;
+}
+
+/**
+ * Por que este arquivo não rendeu uma linha sequer.
+ *
+ * A frase que estava aqui era "não encontrei nenhum INSERT", e ela era dita
+ * sobre arquivos que tinham seis: mandava o baker conferir a única coisa que
+ * estava certa, enquanto o defeito era do leitor. O texto agora conta o que o
+ * arquivo tem, e a contagem sai do próprio arquivo.
+ */
+export function explainEmptyScript(text: string, source: string): string {
+  const inserts = findInsertStatements(text).length;
+  const tables = countCreateTables(text);
+
+  if (inserts > 0) {
+    return (
+      `o arquivo ${source} tem ${inserts} INSERT e nenhum deles traz uma linha de valores — ` +
+      'confira se o SCRIPT terminou de escrever o arquivo antes de ele ser copiado'
+    );
+  }
+  if (tables > 0) {
+    return (
+      `o arquivo ${source} tem ${tables} CREATE TABLE e nenhum INSERT: o banco que o SCRIPT leu ` +
+      'está vazio. Confira se ele rodou sobre .../database/tapsDB, que é o banco do TAPS antigo'
+    );
+  }
+  return (
+    `o arquivo ${source} não tem nenhum INSERT nem nenhum CREATE TABLE — não é a saída de ` +
+    "SCRIPT TO 'taps-export.sql'. Rode esse comando conectado ao banco antigo e mande o arquivo que ele gerar"
+  );
+}
+
+function countCreateTables(text: string): number {
+  CREATE.lastIndex = 0;
+  let count = 0;
+  while (CREATE.exec(text) !== null) count += 1;
+  return count;
+}
+
+/** As primeiras letras de um comando, para a mensagem de recusa. */
+function snippet(text: string, start: number): string {
+  const line = text.slice(start, start + 80).split('\n')[0]!;
+  return line.length < 80 ? line : `${line.slice(0, 77)}...`;
+}
+
+/**
  * Every row of every `INSERT` in an H2 script export, in file order.
  *
  * Table and column names are lower-cased: H2 upper-cases unquoted identifiers,
@@ -150,10 +261,17 @@ function splitTopLevel(body: string): string[] {
 export function parseH2Script(text: string): LegacyRow[] {
   const rows: LegacyRow[] = [];
   const declared = parseTableColumns(text);
-  INSERT.lastIndex = 0;
 
-  let match: RegExpExecArray | null;
-  while ((match = INSERT.exec(text)) !== null) {
+  for (const start of findInsertStatements(text)) {
+    INSERT.lastIndex = start;
+    const match = INSERT.exec(text);
+    if (match === null) {
+      throw new LegacyParseError(
+        `não entendi o INSERT que começa em "${snippet(text, start)}" — esperava ` +
+          'INSERT INTO tabela VALUES (…) ou INSERT INTO tabela (colunas) VALUES (…), que são as ' +
+          'duas formas que o SCRIPT do H2 escreve. Pular esse comando apagaria as linhas dele',
+      );
+    }
     const table = match[1]!.toLowerCase();
     const listed = match[2];
     const columns =
@@ -192,7 +310,6 @@ export function parseH2Script(text: string): LegacyRow[] {
       }
       break;
     }
-    INSERT.lastIndex = cursor;
   }
 
   return rows;

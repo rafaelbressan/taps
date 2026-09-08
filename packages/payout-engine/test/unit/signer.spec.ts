@@ -8,6 +8,7 @@ import {
   buildAuthenticationPayload,
   encodePublicKeyHash,
 } from '../../src/chain/client-auth';
+import { EstimationSigner } from '../../src/chain/estimation-signer';
 import {
   GENERIC_OPERATION_WATERMARK,
   OctezRemoteSigner,
@@ -98,13 +99,24 @@ describe('no local signing key anywhere in the package', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const exported = require('../../src/index') as Record<string, unknown>;
     const names = Object.keys(exported).filter((name) => /signer/i.test(name));
+    // `EstimationSigner` entrou nesta lista no BRES-133 e é o único nome aqui
+    // que produz assinatura nenhuma — o caso abaixo é o que cobra isso dele.
     expect(names.sort()).toEqual([
+      'EstimationSigner',
+      'EstimationSignerCannotSignError',
       'HttpsSignerTransport',
       'OctezRemoteSigner',
       'assertSignerUrlAllowed',
       'createSignerTransport',
       'loadSignerConfig',
     ]);
+  });
+
+  it('the one exported Taquito signer cannot produce a signature', async () => {
+    const signer = new EstimationSigner(tz1(3), { getManagerKey: async () => null });
+    await expect(signer.sign()).rejects.toThrow(/no signing capability/);
+    await expect(signer.secretKey()).rejects.toThrow(/no signing capability/);
+    await expect(signer.provePossession()).rejects.toThrow(/no signing capability/);
   });
 });
 

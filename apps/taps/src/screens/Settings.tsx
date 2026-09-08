@@ -72,7 +72,7 @@ const GROUPS: readonly Group[] = [
         key: SETTING_KEYS.network,
         label: 'Rede',
         hint: 'mainnet move dinheiro de verdade. Comece numa rede de teste.',
-        placeholder: 'ghostnet',
+        placeholder: 'shadownet',
       },
       {
         key: SETTING_KEYS.rpcUrl,
@@ -84,7 +84,7 @@ const GROUPS: readonly Group[] = [
         key: SETTING_KEYS.tzktApiUrl,
         label: 'Endereço da TzKT',
         hint: 'De onde vêm o ciclo, o split de recompensa e o estado da operação.',
-        placeholder: 'https://api.ghostnet.tzkt.io',
+        placeholder: 'https://api.shadownet.tzkt.io',
       },
     ],
   },
@@ -162,7 +162,14 @@ const GROUPS: readonly Group[] = [
 export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // O erro carrega o próprio título. Antes havia um só, fixo em "Não consegui
+  // salvar", e a recusa de um arquivo de credencial saía sob ele — dizendo que
+  // falhou ao salvar o que nunca esteve sendo salvo.
+  const [error, setError] = useState<{
+    what: string;
+    where: string;
+    detail: string;
+  } | null>(null);
   const [saved, setSaved] = useState(false);
   const [credentialPresent, setCredentialPresent] = useState(
     ready.status.signer_credential_present,
@@ -170,12 +177,20 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
   const [credentialPublicKey, setCredentialPublicKey] = useState(
     ready.status.signer_credential_public_key,
   );
+  const [tlsCaPresent, setTlsCaPresent] = useState(ready.status.signer_tls_ca_present);
+  const [tlsCaFingerprint, setTlsCaFingerprint] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       const raw = await readRawSettings(ready.db);
       setValues(Object.fromEntries(raw));
-    })().catch((caught) => setError(describe(caught)));
+    })().catch((caught) =>
+      setError({
+        what: 'Não consegui ler a configuração',
+        where: 'configuração',
+        detail: describe(caught),
+      }),
+    );
   }, [ready]);
 
   async function save() {
@@ -187,7 +202,11 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setSaved(true);
       onSaved();
     } catch (caught) {
-      setError(describe(caught));
+      setError({
+        what: 'Não consegui salvar',
+        where: 'configuração',
+        detail: describe(caught),
+      });
     } finally {
       setSaving(false);
     }
@@ -220,7 +239,55 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setCredentialPublicKey(imported.public_key);
       onSaved();
     } catch (caught) {
-      setError(describe(caught));
+      setError({
+        what: 'Não importei a credencial',
+        where: 'credencial do signer',
+        detail: describe(caught),
+      });
+    }
+  }
+
+  /**
+   * O certificado da CA do signer (BRES-144).
+   *
+   * Ele é público — não é segredo, e por isso vai para o banco e não para o
+   * cofre. Mesmo assim entra por arquivo escolhido pelo Rust: quem decide a
+   * raiz de confiança da conexão que pede assinatura decide de quem esta
+   * máquina aceita bytes, e isso não é decisão da janela.
+   */
+  async function importTlsCa() {
+    setError(null);
+    try {
+      const chosen = await pickFile('signer-tls-ca', 'ca.crt do octez-signer');
+      if (!chosen) return;
+      const imported = await invoke<{ sha256: string }>('signer_import_tls_ca', {
+        token: chosen.token,
+      });
+      setTlsCaPresent(true);
+      setTlsCaFingerprint(imported.sha256);
+      onSaved();
+    } catch (caught) {
+      setError({
+        what: 'Não importei o certificado',
+        where: 'CA do signer',
+        detail: describe(caught),
+      });
+    }
+  }
+
+  async function forgetTlsCa() {
+    setError(null);
+    try {
+      await invoke('signer_forget_tls_ca');
+      setTlsCaPresent(false);
+      setTlsCaFingerprint(null);
+      onSaved();
+    } catch (caught) {
+      setError({
+        what: 'Não consegui esquecer o certificado',
+        where: 'CA do signer',
+        detail: describe(caught),
+      });
     }
   }
 
@@ -232,7 +299,11 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setCredentialPublicKey(null);
       onSaved();
     } catch (caught) {
-      setError(describe(caught));
+      setError({
+        what: 'Não consegui esquecer a credencial',
+        where: 'credencial do signer',
+        detail: describe(caught),
+      });
     }
   }
 
@@ -245,7 +316,7 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       </p>
 
       {error && (
-        <Fault what="Não consegui salvar" where="configuração" cost={error} />
+        <Fault what={error.what} where={error.where} cost={error.detail} />
       )}
       {saved && <p className="note">Configuração salva.</p>}
 
@@ -291,6 +362,46 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
           </button>
           {credentialPresent && (
             <button type="button" className="t-button t-button--quiet" onClick={forgetCredential}>
+              Esquecer
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="t-card" style={{ marginBottom: 'var(--s-6)' }}>
+        <h2 className="card__title">Certificado do signer</h2>
+        <div className="pair">
+          <span className="pair__key">Estado</span>
+          <span className="pair__value">
+            {tlsCaPresent ? 'CA importada' : 'só CAs públicas'}
+          </span>
+        </div>
+        {tlsCaFingerprint && (
+          <div className="pair">
+            <span className="pair__key">SHA-256</span>
+            <span className="pair__value t-address" title={tlsCaFingerprint}>
+              {tlsCaFingerprint}
+            </span>
+          </div>
+        )}
+        <p className="note" style={{ marginTop: 'var(--s-3)' }}>
+          O TAPS só fala com o signer por TLS, e um signer na sua rede não tem certificado de
+          autoridade pública. Importe o <code>ca.crt</code> que o Passo 3 do guia do{' '}
+          <code>octez-signer</code> gera. Sem ele o TAPS não completa a conexão e nenhum ciclo é
+          pago.
+        </p>
+        <p className="note">
+          Depois de importar, confira o SHA-256 acima contra o que{' '}
+          <code>openssl x509 -in ca.crt -noout -fingerprint -sha256</code> mostra na máquina do
+          signer. A CA importada passa a ser a <strong>única</strong> aceita nesta conexão — as
+          públicas saem, porque um signer nunca é um site público.
+        </p>
+        <div className="row" style={{ marginTop: 'var(--s-4)' }}>
+          <button type="button" className="t-button" onClick={importTlsCa}>
+            Escolher o ca.crt do signer
+          </button>
+          {tlsCaPresent && (
+            <button type="button" className="t-button t-button--quiet" onClick={forgetTlsCa}>
               Esquecer
             </button>
           )}

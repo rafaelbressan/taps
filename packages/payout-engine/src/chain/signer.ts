@@ -106,13 +106,26 @@ export function assertSignerUrlAllowed(url: string): URL {
 }
 
 /**
+ * A configuração vinda do ambiente, com a credencial **garantida**.
+ *
+ * `SignerConfig.clientAuthKey` é opcional porque quem traz o próprio
+ * `SignerAuthenticator` pode não ter credencial nenhuma deste lado — é o caso
+ * do aplicativo desktop, onde ela vive atrás da fronteira Rust. Um processo
+ * que lê do ambiente não tem essa desculpa, e o tipo diz isso em vez de deixar
+ * o chamador conferir.
+ */
+export interface EnvSignerConfig extends SignerConfig {
+  readonly clientAuthKey: string;
+}
+
+/**
  * Reads the signer endpoint from the environment.
  *
  * All three variables are required and none has a default. A missing one
  * stops the process: the alternative is a payout host that boots, finds no
  * signer, and reaches for something else.
  */
-export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
+export function loadSignerConfig(env: NodeJS.ProcessEnv = process.env): EnvSignerConfig {
   const url = requireEnv(
     env,
     SIGNER_URL_ENV,

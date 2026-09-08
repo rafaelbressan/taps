@@ -80,6 +80,32 @@ Hash: tz1P3fJFGgbGnBNeZeSfHz5NEFzFe2aRqZBv     ← anote: é o "endereço da cha
 
 Esse endereço precisa ter saldo: é dele que os pagamentos saem.
 
+### E precisa estar **revelado** na cadeia
+
+Uma conta nova do Tezos não consegue enviar nada até que a chave pública dela
+tenha sido publicada — o "reveal". É uma vez na vida da chave, e o TAPS não faz
+isso por você: revelar publica a chave pública de pagamento, e essa é uma ação
+sua, não de um agendador rodando às 3 da manhã.
+
+Mande saldo para o endereço primeiro. Depois, no host do signer:
+
+```bash
+docker run --rm -it -v ~/taps-signer/data:/data --entrypoint octez-client \
+  tezos/tezos:latest --endpoint <URL-DO-SEU-NÓ> -d /data reveal key for payout
+```
+
+Ele vai pedir a senha da chave. Se você já tiver enviado qualquer transferência
+a partir desse endereço por outro caminho, ele já está revelado e o comando vai
+dizer isso.
+
+Para conferir, o endereço no explorador de blocos mostra a chave pública, ou:
+
+```bash
+curl -s <URL-DO-SEU-NÓ>/chains/main/blocks/head/context/contracts/<tz1-do-payout>/manager_key
+```
+
+`null` é conta não revelada. Um `edpk…` é conta pronta.
+
 ## Passo 2 — Crie a credencial de cliente
 
 O signer vai rodar recusando qualquer pedido que não venha assinado por uma
@@ -114,17 +140,47 @@ O signer só serve esta API por TCP, e HTTP em claro está proibido: o corpo da
 requisição **são os bytes que movem dinheiro**, e quem estiver no caminho pode
 trocá-los.
 
+São **dois** certificados, e a distinção importa: uma autoridade (a CA) e o
+certificado que o daemon apresenta (a folha). O TLS recusa um certificado de
+CA usado como certificado de servidor, então um `openssl req -x509` sozinho
+não serve — era o que este guia mandava fazer até o BRES-144, e com ele o TAPS
+nunca completava a conexão.
+
 ```bash
 cd ~/taps-signer
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout tls.key -out tls.crt \
-  -subj "/CN=taps-signer" \
-  -addext "subjectAltName=IP:192.168.1.20,DNS:taps-signer"
+
+# 1. A autoridade. É este arquivo que você leva para o TAPS.
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout ca.key -out ca.crt \
+  -subj "/CN=taps-signer-ca"
+
+# 2. O certificado que o daemon apresenta, assinado pela autoridade acima.
+openssl req -newkey rsa:2048 -nodes -keyout tls.key -out tls.csr \
+  -subj "/CN=taps-signer"
+
+openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out tls.crt -days 365 \
+  -extfile <(printf 'subjectAltName=IP:192.168.1.20,DNS:taps-signer\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth')
+
+rm tls.csr
 ```
 
 Troque `192.168.1.20` pelo endereço que a máquina do TAPS vai usar para chegar
-no signer. Anote a data: **o certificado vence em um ano**, e quando vencer o
-TAPS para de conseguir assinar. Ponha um lembrete.
+no signer. Anote a data: **a folha vence em um ano**, e quando vencer o TAPS
+para de conseguir assinar. Ponha um lembrete. A `ca.key` não é usada pelo
+daemon — guarde-a fora do host do signer, ou apague-a: quem a tiver consegue
+emitir um certificado que o TAPS vai aceitar.
+
+Anote a impressão digital, que você vai conferir na tela do TAPS:
+
+```bash
+openssl x509 -in ca.crt -noout -fingerprint -sha256
+```
+
+Leve o **`ca.crt`** para a máquina do TAPS e importe em **Configuração →
+Certificado do signer**. Sem isso o TAPS só confia em autoridade pública, que
+um signer de rede interna não tem, e a conexão morre antes do primeiro pedido
+de assinatura.
 
 ## Passo 4 — Suba o daemon
 
@@ -232,6 +288,8 @@ diferente de onde você guarda a senha.
 | erro de certificado | o TLS venceu, ou o endereço que o TAPS usa não está no `subjectAltName` |
 | "o signer recusou o pedido" | a credencial de cliente não foi autorizada, ou foi trocada |
 | "não há credencial de cliente guardada nesta máquina" | o cofre do sistema não tem a chave — reimporte pela Configuração |
+| "the payout account was never revealed" | falta o reveal do Passo 1 — mande saldo e revele antes do primeiro ciclo |
+| "o certificado do octez-signer não foi aceito" | falta importar o `ca.crt` em Configuração, ou o certificado foi gerado com um `openssl req -x509` só (veja o Passo 3) |
 
 ---
 

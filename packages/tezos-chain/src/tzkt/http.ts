@@ -1,3 +1,4 @@
+import { boundGlobalFetch } from '../default-fetch';
 import { HttpError, RateLimitedError, StaleIndexerError } from '../errors';
 import type { NetworkConfig } from '../network';
 
@@ -75,7 +76,7 @@ export class TzKTHttp {
     private readonly network: NetworkConfig,
     options: TzKTHttpOptions = {},
   ) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? boundGlobalFetch();
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.concurrency = Math.min(4, Math.max(1, options.concurrency ?? 2));
     this.maxRetries = options.maxRetries ?? 5;

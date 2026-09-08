@@ -80,6 +80,29 @@ jobs:
       - name: Selftest (mutantes de plano, sem rede)
         run: npm run selftest -- --offline
 
+  # Um workflow que nunca disparou é visualmente idêntico a um workflow aprovado:
+  # o GitHub não mostra nada, e "nada" se lê como "sem problema". Foi assim que o
+  # `ci.yml` legado observou `main` por meses num repositório cuja branch padrão é
+  # `master` — 450 linhas de lint, build e teste que nunca rodaram uma vez, e o ponto
+  # cego onde 12 erros TS2300 sobreviveram (BRES-72).
+  #
+  # Este job confere o gatilho de cada workflow contra a branch padrão de verdade,
+  # lida da API, nunca escrita aqui. O `--selftest` roda antes e prova que a checagem
+  # consegue reprovar; uma checagem que só sabe aprovar é o mesmo ponto cego de novo.
+  workflow-branches:
+    name: Todo workflow dispara na branch padrão?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PyYAML
+        run: python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+      - name: A checagem sabe reprovar?
+        run: python3 .github/scripts/check_workflow_branches.py --selftest
+      - name: Gatilhos vs. branch padrão
+        run: |
+          python3 .github/scripts/check_workflow_branches.py \
+            --default-branch "${{ github.event.repository.default_branch }}"
+
   # Descobre se já existe app para buildar. Precisa ser um job com checkout: `hashFiles()`
   # num `if` de job roda ANTES do checkout, sobre um workspace vazio, e devolveria sempre
   # "não existe" — inclusive depois do app existir. O portão nunca mais armaria.
