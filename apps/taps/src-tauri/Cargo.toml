@@ -44,3 +44,15 @@ url = "=2.5.7"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["time"] }
+sha2 = "=0.10.9"
+base64 = "=0.21.7"
+
+# Só de teste. O defeito do BRES-144 passou porque nada aqui dentro chegava a
+# fazer um handshake TLS de verdade: o portão que existia rodava no Node, com
+# `NODE_EXTRA_CA_CERTS`, e por isso nunca tocou o cliente do Rust. Um teste que
+# não abre um servidor TLS também não teria pego.
+[dev-dependencies]
+rcgen = "=0.13.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio-rustls = { version = "=0.26.5", default-features = false, features = ["ring"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std"] }

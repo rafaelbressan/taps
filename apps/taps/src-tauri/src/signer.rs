@@ -134,6 +134,76 @@ pub fn store_credential(secret: &str) -> Result<ImportedCredential, String> {
     Ok(ImportedCredential { public_key })
 }
 
+/// O que o baker vê depois de importar a CA do signer.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportedTlsCa {
+    /// PEM normalizado, para o chamador gravar em `app_settings`.
+    pub pem: String,
+    /// Quantos certificados o arquivo trouxe. Uma cadeia é legítima.
+    pub certificates: usize,
+    /// SHA-256 do arquivo, em hex. É o que o baker compara com o que o
+    /// `openssl x509 -fingerprint -sha256` diz no host do signer — sem isso
+    /// "importei um arquivo" não prova que foi o arquivo certo.
+    pub sha256: String,
+}
+
+/// Lê o `ca.crt` do disco, confere que é PEM utilizável e devolve.
+///
+/// Público, ao contrário da credencial de cliente: um certificado de CA não é
+/// segredo e por isso vai para `app_settings`, não para o cofre. O que ele é
+/// — a raiz que decide de quem esta máquina aceita uma assinatura — é o
+/// motivo de ele entrar por arquivo escolhido pelo Rust e não por um campo
+/// de texto da janela.
+pub fn import_tls_ca_from_file(path: &std::path::Path) -> Result<ImportedTlsCa, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("não consegui ler {}: {error}", path.display()))?;
+    let pem = String::from_utf8(bytes)
+        .map_err(|_| "o arquivo não é texto — um `ca.crt` em PEM é texto".to_string())?;
+
+    let roots = parse_ca_bundle(&pem)?;
+
+    Ok(ImportedTlsCa {
+        certificates: roots.len(),
+        sha256: first_certificate_fingerprint(&pem)?,
+        pem: pem.trim().to_string(),
+    })
+}
+
+/// SHA-256 do DER do primeiro certificado, em hex minúsculo com `:`.
+///
+/// É o mesmo valor que `openssl x509 -in ca.crt -noout -fingerprint -sha256`
+/// imprime no host do signer, e é por isso que o hash é do **DER** e não do
+/// arquivo: o PEM tem quebra de linha e comentário, o DER é o certificado.
+/// Comparar dois valores que não são a mesma coisa seria pior que não mostrar
+/// nenhum.
+fn first_certificate_fingerprint(pem: &str) -> Result<String, String> {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+
+    let start = pem
+        .find(BEGIN)
+        .ok_or_else(|| "o arquivo não tem um bloco BEGIN CERTIFICATE".to_string())?
+        + BEGIN.len();
+    let end = pem[start..]
+        .find(END)
+        .ok_or_else(|| "o bloco do certificado não termina com END CERTIFICATE".to_string())?
+        + start;
+
+    let body: String = pem[start..end]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, body)
+        .map_err(|error| format!("o corpo do certificado não é base64 válido ({error})"))?;
+
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(&der);
+    Ok(digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
 pub fn credential_present() -> bool {
     keyring::Entry::new(SERVICE, ACCOUNT)
         .and_then(|entry| entry.get_password())
@@ -187,6 +257,7 @@ fn load() -> Result<Zeroizing<String>, String> {
 /// destino.
 pub async fn call(
     base_url: &str,
+    tls_ca_pem: Option<&str>,
     method: &str,
     path: &str,
     body: Option<String>,
@@ -205,13 +276,7 @@ pub async fn call(
     }
 
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        // Sem redirecionamento: um 302 levaria o pedido de assinatura para
-        // outro lugar sem ninguém ver.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = build_client(tls_ca_pem)?;
 
     let request = match method {
         "GET" => client.get(&url),
@@ -225,15 +290,103 @@ pub async fn call(
         other => return Err(format!("método {other} não é usado no caminho do signer")),
     };
 
-    let response = request.send().await.map_err(|error| {
-        format!(
-            "não consegui falar com o octez-signer ({error}) — confira se o daemon está no ar \
-             e se foi destravado depois do último restart"
-        )
-    })?;
+    let response = request
+        .send()
+        .await
+        .map_err(|error| describe_send_failure(&error))?;
     let status = response.status().as_u16();
     let body = response.text().await.map_err(|error| error.to_string())?;
     Ok(SignerResponse { status, body })
+}
+
+/// O cliente HTTP do caminho do signer, com a raiz que o operador configurou.
+///
+/// **Por que isto existe (BRES-144).** `reqwest` entra aqui com a feature
+/// `rustls-tls` e mais nada, o que embute o `webpki-roots` — o pacote de CAs
+/// públicas da Mozilla — dentro do binário. O `OCTEZ-SIGNER.md` manda o baker
+/// criar um certificado próprio, porque um signer numa LAN não tem como ter
+/// certificado de CA pública. As duas coisas juntas davam um aplicativo que,
+/// seguindo o runbook à risca, nunca conseguia falar com o signer: o handshake
+/// morria antes do primeiro pedido de assinatura e nenhum ciclo era pago.
+///
+/// **E a raiz configurada SUBSTITUI as embutidas, não soma.** Um
+/// `octez-signer` nunca é um host público; continuar aceitando as CAs da
+/// Mozilla nesta conexão só aumentaria o conjunto de quem consegue se passar
+/// por ele, sem servir a ninguém. Quem não configurar CA nenhuma continua com
+/// as raízes públicas — é o caso de um signer atrás de um domínio com
+/// certificado de verdade, e não há razão para quebrá-lo.
+///
+/// O que NÃO existe aqui, e não vai existir: `danger_accept_invalid_certs`.
+/// O corpo desta requisição são os bytes que movem dinheiro, e um TLS que não
+/// verifica nada é o mesmo que o HTTP em claro que a função recusa acima.
+pub fn build_client(tls_ca_pem: Option<&str>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        // Sem redirecionamento: um 302 levaria o pedido de assinatura para
+        // outro lugar sem ninguém ver.
+        .redirect(reqwest::redirect::Policy::none());
+
+    if let Some(pem) = tls_ca_pem {
+        let roots = parse_ca_bundle(pem)?;
+        builder = builder.tls_built_in_root_certs(false);
+        for root in roots {
+            builder = builder.add_root_certificate(root);
+        }
+    }
+
+    builder.build().map_err(|error| error.to_string())
+}
+
+/// Lê o PEM e recusa o que não for utilizável, com o motivo escrito.
+///
+/// Um bundle vazio é recusado explicitamente: sem isto, um arquivo de texto
+/// qualquer desligaria as raízes embutidas e não colocaria nenhuma no lugar —
+/// nada confiaria em nada, e o erro apareceria só no primeiro pagamento.
+pub fn parse_ca_bundle(pem: &str) -> Result<Vec<reqwest::Certificate>, String> {
+    let roots = reqwest::Certificate::from_pem_bundle(pem.as_bytes()).map_err(|error| {
+        format!(
+            "o certificado da CA do signer não é um PEM que eu consiga ler ({error}) — o \
+             arquivo precisa ser o `ca.crt` gerado no Passo 3 do OCTEZ-SIGNER.md, em PEM \
+             (começa com -----BEGIN CERTIFICATE-----)"
+        )
+    })?;
+    if roots.is_empty() {
+        return Err(
+            "o arquivo não tem nenhum certificado dentro — escolhi não seguir com uma lista \
+             de raízes vazia, porque isso desligaria a verificação sem avisar"
+                .to_string(),
+        );
+    }
+    Ok(roots)
+}
+
+/// A falha de rede, dita de forma que o baker saiba o que fazer.
+///
+/// O caso de certificado ganha frase própria porque o erro cru do rustls
+/// (`invalid peer certificate`, `CaUsedAsEndEntity`) não diz a ninguém que a
+/// resposta está na tela de Configuração.
+fn describe_send_failure(error: &reqwest::Error) -> String {
+    let mut chain = String::new();
+    let mut source: Option<&dyn std::error::Error> = std::error::Error::source(error);
+    while let Some(current) = source {
+        chain.push_str(&current.to_string());
+        chain.push(' ');
+        source = current.source();
+    }
+
+    if chain.contains("certificate") || chain.contains("CaUsedAsEndEntity") {
+        return format!(
+            "o certificado do octez-signer não foi aceito ({error}) — abra Configuração e \
+             importe o `ca.crt` do signer. Se você gerou o certificado com um `openssl req \
+             -x509` só, ele é uma CA e o TLS recusa CA como certificado de servidor: refaça \
+             pelo Passo 3 do OCTEZ-SIGNER.md, que gera CA e certificado folha separados"
+        );
+    }
+
+    format!(
+        "não consegui falar com o octez-signer ({error}) — confira se o daemon está no ar \
+         e se foi destravado depois do último restart"
+    )
 }
 
 fn describe_keyring(error: keyring::Error) -> String {
