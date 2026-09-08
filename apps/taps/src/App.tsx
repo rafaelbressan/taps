@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { ConfigurationError } from '@tezos-suite/chain';
@@ -52,6 +52,8 @@ interface AppStatus {
    * autoridades públicas (BRES-137). Sem ele o Rust recusa a chamada.
    */
   readonly signer_certificate_fingerprint: string | null;
+  /** Preenchido quando o cofre do sistema não respondeu. */
+  readonly signer_vault_error: string | null;
   readonly platform: string;
   readonly version: string;
 }
@@ -88,6 +90,24 @@ export function App() {
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
 
+  // A assinatura da configuração com que o motor atual foi montado.
+  //
+  // Sem isto o motor era remontado a cada `refresh`, e como o tique chama
+  // `refresh` no fim de toda passada, o agendador nascia de novo a cada
+  // passada: estado "parado", "última passada —" e "falhas seguidas 0" para
+  // sempre, enquanto a Trilha enchia de tentativas. O que a tela mostrava não
+  // era um agendador parado, era um agendador recém-nascido.
+  const builtFrom = useRef<string | null>(null);
+  const runtimeRef = useRef<Runtime | null>(null);
+
+  // O efeito é assíncrono e enxergaria um `runtime` velho pela closure; o ref
+  // acompanha o estado para que a comparação acima olhe o motor de agora.
+  const holdRuntime = useCallback((next: Runtime | null, signature: string | null) => {
+    runtimeRef.current = next;
+    builtFrom.current = signature;
+    setRuntime(next);
+  }, []);
+
   // Abrir o banco e aplicar as migrations é a primeira coisa que acontece, e
   // acontece sempre. A versão que este substitui não tinha migration nenhuma:
   // o sistema subia e falhava na primeira consulta.
@@ -107,6 +127,30 @@ export function App() {
     };
   }, []);
 
+  // O banco abre uma vez; `app_status` não pode. Ele carrega o estado da
+  // credencial, e esse estado muda no meio da sessão: importar a credencial
+  // e voltar para o Início mostrava "ausente" — com o bloqueio de volta —
+  // até fechar e reabrir o aplicativo, porque o efeito acima só roda na
+  // montagem. Quem importa, esquece ou salva já chama `refresh`; faltava
+  // alguém reler o status quando ele chama.
+  useEffect(() => {
+    if (revision === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await invoke<AppStatus>('app_status');
+        if (!cancelled) {
+          setReady((current) => (current ? { ...current, status } : current));
+        }
+      } catch (error) {
+        if (!cancelled) setFatal(describe(error));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [revision]);
+
   // Montar o motor depende da configuração estar completa. Enquanto não
   // estiver, `blocked` carrega a frase que a tela mostra — e nenhum tique roda.
   useEffect(() => {
@@ -119,7 +163,7 @@ export function App() {
         if (missing.length > 0) {
           if (!cancelled) {
             setSettings(null);
-            setRuntime(null);
+            holdRuntime(null, null);
             setBlocked(
               `O TAPS ainda não está configurado. Falta preencher: ${missing
                 .map((entry) => entry.label)
@@ -130,10 +174,24 @@ export function App() {
         }
 
         const parsed = parseSettings(raw);
+        // Cofre fora do ar não é credencial faltando. Mandar o baker importar
+        // de novo a credencial que já está lá é o pior conselho possível.
+        if (ready.status.signer_vault_error) {
+          if (!cancelled) {
+            setSettings(parsed);
+            holdRuntime(null, null);
+            setBlocked(
+              'O cofre de credenciais desta sessão não respondeu, então o TAPS não consegue ' +
+                'ler a credencial do signer — nem saber se ela está lá. Não é a credencial ' +
+                `que está faltando. ${ready.status.signer_vault_error}`,
+            );
+          }
+          return;
+        }
         if (!ready.status.signer_credential_present) {
           if (!cancelled) {
             setSettings(parsed);
-            setRuntime(null);
+            holdRuntime(null, null);
             setBlocked(
               'Falta a credencial de cliente do octez-signer. É com ela que este computador ' +
                 'prova ao signer quem está pedindo, e sem ela o signer recusa o pedido. Abra ' +
@@ -146,12 +204,25 @@ export function App() {
         if (!ready.status.signer_certificate_fingerprint) {
           if (!cancelled) {
             setSettings(parsed);
-            setRuntime(null);
+            holdRuntime(null, null);
             setBlocked(
               'Falta o certificado do octez-signer. O TAPS confia num certificado só — o seu — ' +
                 'e não nas autoridades públicas, que não têm nada a dizer sobre um daemon na sua ' +
                 'rede. Abra Configuração e importe o tls.crt do host do signer.',
             );
+          }
+          return;
+        }
+
+        // Remontar só quando a configuração muda de verdade. `bigint` não
+        // sobrevive ao `JSON.stringify` sozinho, daí o replacer.
+        const signature = JSON.stringify(parsed, (_key, value) =>
+          typeof value === 'bigint' ? `${value}n` : value,
+        );
+        if (builtFrom.current === signature && runtimeRef.current) {
+          if (!cancelled) {
+            setSettings(parsed);
+            setBlocked(null);
           }
           return;
         }
@@ -163,12 +234,12 @@ export function App() {
         });
         if (!cancelled) {
           setSettings(parsed);
-          setRuntime(built);
+          holdRuntime(built, signature);
           setBlocked(null);
         }
       } catch (error) {
         if (cancelled) return;
-        setRuntime(null);
+        holdRuntime(null, null);
         setBlocked(
           error instanceof ConfigurationError
             ? `A configuração está incompleta: ${error.message}. Abra Configuração.`
@@ -179,7 +250,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [ready, revision]);
+  }, [ready, revision, holdRuntime]);
 
   // O tique vem do Rust. Um `setInterval` da webview seria estrangulado com a
   // janela escondida, e um payout que só acontece com a janela aberta não é

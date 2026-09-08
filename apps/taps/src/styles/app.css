@@ -105,8 +105,23 @@ body {
 
 .pair { display: flex; justify-content: space-between; gap: var(--s-4); padding: var(--s-2) 0; }
 .pair + .pair { border-top: 1px solid var(--c-hairline); }
-.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); }
-.pair__value { font-family: var(--f-data); text-align: right; }
+/* `min-width: 0` porque item de flex não encolhe abaixo do próprio conteúdo
+   por padrão: era assim que `não iniciado` saía pela borda do cartão
+   Agendador na largura padrão de 1180 px. */
+/* O rótulo nunca encolhe: com `min-width: 0` nele, um caminho longo de banco
+   espremia "Banco" até encostar no valor, e a linha saía "BancoC:\Users\…".
+   Quem tem de ceder é o valor. */
+.pair__key { color: var(--c-steel-deep); font-size: var(--t-sm); flex: 0 0 auto; }
+.pair__value {
+  font-family: var(--f-data);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* O motivo da falha, embaixo do que falhou. Cor e tipo vêm do
+   `.t-field__error` do sistema de desenho; daqui sai só o lugar. */
+.trail__reason { display: block; margin-top: var(--s-1); }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th {

@@ -91,7 +91,14 @@ export function Trail({ ready, settings }: { ready: Ready; settings: TapsSetting
               <tr key={event.id}>
                 <td>{whenText(event.at)}</td>
                 <td>{event.cycle === null ? '—' : <span className="t-cycle">{event.cycle}</span>}</td>
-                <td title={event.detail ?? undefined}>{event.action}</td>
+                <td>
+                  {event.action}
+                  {/* O motivo estava só no `title`. Ninguém passa o mouse numa
+                      linha de erro para descobrir por que o pagamento parou. */}
+                  {event.detail && event.outcome !== 'ok' && (
+                    <span className="t-field__error trail__reason">{event.detail}</span>
+                  )}
+                </td>
                 <td>{event.actor}</td>
                 <td>{event.outcome}</td>
                 <td className="num">

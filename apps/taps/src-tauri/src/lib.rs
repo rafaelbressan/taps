@@ -149,13 +149,18 @@ pub struct AppStatus {
     /// `None` significa que o TAPS não fala com signer nenhum: o canal de
     /// assinatura confia num certificado só, e sem ele `signer::call` recusa.
     signer_certificate_fingerprint: Option<String>,
+    /// Preenchido quando o cofre do sistema não respondeu. Enquanto isso vale,
+    /// `signer_credential_present: false` não quer dizer "não importou": quer
+    /// dizer "não deu para perguntar".
+    signer_vault_error: Option<String>,
     platform: String,
     version: String,
 }
 
 #[tauri::command]
 fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
-    let present = signer::credential_present();
+    let state_of_credential = signer::credential_state();
+    let present = matches!(state_of_credential, signer::CredentialState::Present);
     AppStatus {
         signer_certificate_fingerprint: state
             .setting(SIGNER_CA_PEM)
@@ -168,6 +173,10 @@ fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
             signer::credential_public_key().ok()
         } else {
             None
+        },
+        signer_vault_error: match state_of_credential {
+            signer::CredentialState::VaultDown(why) => Some(why),
+            _ => None,
         },
         platform: std::env::consts::OS.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),

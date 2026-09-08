@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BackupError, inspectBackup, restoreBackup } from '../../src/backup';
-import { backupInto } from '../../src/backup-core';
+import { backupInto, judgeUnreadable } from '../../src/backup-core';
 import { sha256 } from '../../src/node';
 import { importLegacyExport } from '../../src/legacy/import';
 import { migrate } from '../../src/migrate';
@@ -77,6 +77,30 @@ describe('backup and restore', () => {
   it('refuses a file that is not a database', async () => {
     writeFileSync(copy('lixo.db'), 'isto não é um banco');
     await expect(inspectBackup(copy('lixo.db'))).rejects.toBeInstanceOf(BackupError);
+  });
+
+  // BRES-124: no aplicativo desktop quem abre o candidato é o Rust, e a recusa
+  // do SQLite chegava crua na tela — "file is not a database", em inglês, sem
+  // dizer o que fazer. `judgeUnreadable` é a tradução, e mora aqui porque é a
+  // mesma decisão que `judgeBackup`: se o arquivo serve, e por quê.
+  describe('judgeUnreadable', () => {
+    it('diz em português que o arquivo não é um banco', () => {
+      const refusal = judgeUnreadable('lixo.txt', new Error('file is not a database'));
+      expect(refusal).toBeInstanceOf(BackupError);
+      expect(refusal.message).toContain('não é um banco de dados');
+      expect(refusal.message).toContain('lixo.txt');
+      expect(refusal.message).not.toContain('file is not a database');
+    });
+
+    it('separa o arquivo ilegível do arquivo que não é banco', () => {
+      const refusal = judgeUnreadable('sumiu.db', 'unable to open database file');
+      expect(refusal.message).toContain('permissão de leitura');
+    });
+
+    it('um motivo que ninguém previu aparece inteiro, em vez de virar "erro"', () => {
+      const refusal = judgeUnreadable('estranho.db', new Error('disk I/O error'));
+      expect(refusal.message).toContain('disk I/O error');
+    });
   });
 
   it('refuses a SQLite file that is not a TAPS backup', async () => {
