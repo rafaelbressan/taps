@@ -32,7 +32,11 @@ export interface RewardSplit {
   ownDelegatedBalance: bigint;
   externalDelegatedBalance: bigint;
   delegators: SplitDelegator[];
-  /** Conferência de completude: `delegatorsCount` reportado pela API. */
+  /**
+   * `delegatorsCount` como a API reportou. NÃO é conferência de completude: o contador
+   * da TzKT fica abaixo da lista que acompanha. Quem prova a lista inteira é
+   * `Σ delegatedBalance == externalDelegatedBalance`.
+   */
   delegatorsCount: number;
   /**
    * Σ dos campos `*StakedShared`: o rendimento que o **protocolo já creditou** aos

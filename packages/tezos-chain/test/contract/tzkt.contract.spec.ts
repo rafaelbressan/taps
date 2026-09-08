@@ -26,6 +26,7 @@ import {
   TZKT_MAX_PAGE_SIZE,
   assertBakingPowerConsistent,
   assertDelegatorListComplete,
+  delegatorCountDrift,
   fetchRewardSplit,
   rewardFieldNames,
 } from '../../src/tzkt/reward-split';
@@ -95,8 +96,30 @@ describe(`TzKT contract (${network.name})`, () => {
   it('pages a baker whose delegator list does not fit in one request', async () => {
     const split = await fetchRewardSplit(http, LARGE_BAKER, closedCycle);
     expect(split.delegatorsCount).toBeGreaterThan(TZKT_MAX_PAGE_SIZE);
-    expect(split.delegators).toHaveLength(split.delegatorsCount);
+    // Not `toHaveLength(delegatorsCount)`: TzKT's counter drifts below the
+    // list it comes with. What proves the list whole is the balance sum.
+    expect(split.delegators.length).toBeGreaterThan(TZKT_MAX_PAGE_SIZE);
     expect(() => assertDelegatorListComplete(split)).not.toThrow();
+  });
+
+  it('still serves a delegatorsCount that drifts, and balances that do not', async () => {
+    // The measurement the count rule rests on. Two things must stay true for
+    // dropping `delegators.length == delegatorsCount` to remain correct: the
+    // drift is small and never negative, and the balance sum is exact. If
+    // TzKT ever makes the counter an exact row count again, the first
+    // expectation narrows and the rule can go back to an equality.
+    for (const baker of [LARGE_BAKER, REFERENCE_BAKER]) {
+      const split = await fetchRewardSplit(http, baker, closedCycle);
+      const drift = delegatorCountDrift(split);
+      expect(drift).toBeGreaterThanOrEqual(0);
+      expect(drift).toBeLessThan(10);
+
+      const listed = split.delegators.reduce((sum, d) => sum + d.delegatedBalance, 0n);
+      expect(listed).toBe(split.externalDelegatedBalance);
+      expect(new Set(split.delegators.map((d) => d.address)).size).toBe(
+        split.delegators.length,
+      );
+    }
   });
 
   it('reports StakedShared as already credited to the stakers', async () => {

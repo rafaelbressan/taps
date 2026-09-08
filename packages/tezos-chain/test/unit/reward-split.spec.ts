@@ -5,6 +5,7 @@ import {
   TZKT_MAX_PAGE_SIZE,
   assertBakingPowerConsistent,
   assertDelegatorListComplete,
+  delegatorCountDrift,
   fetchRewardSplit,
   parseRewardSplit,
   rewardFieldNames,
@@ -114,6 +115,61 @@ describe('invariants that can fail', () => {
     expect(() => assertDelegatorListComplete(split)).toThrow(/truncated/);
     expect(() => assertDelegatorListComplete(split)).toThrow(
       /listed 100 delegators/,
+    );
+  });
+
+  it('does not abort on a delegatorsCount that drifts below the list', () => {
+    // Everstake cycle 1345, measured 2026-09-08: 60 253 rows against
+    // delegatorsCount 60 252, balances exact. The surplus row is an account
+    // in its first cycle staking with the baker — listed, not counted.
+    const raw = {
+      ...RAW,
+      delegators: [
+        ...(RAW.delegators as unknown[]),
+        { address: 'tz1bmU7gcZ38YVAUqFRzn3WrRnU5Qv1e97Ba', delegatedBalance: 0, emptied: false },
+      ],
+      delegatorsCount: 2919,
+    };
+    const split = parseRewardSplit([raw], BAKE_NUG, 1345);
+
+    expect(delegatorCountDrift(split)).toBe(1);
+    expect(() => assertDelegatorListComplete(split)).not.toThrow();
+  });
+
+  it('does not abort when the drifting row carries money either', () => {
+    // tz3LV9aGKHDnAZHCtC9SjNtTrKRu678FqSki, cycles 1344-1346: one row over
+    // the count, no zero-balance row anywhere, sum still exact. This is the
+    // case that rules out "accept the drift only for zero-balance rows".
+    const extra = { address: 'tz1surplus', delegatedBalance: 500_000, emptied: false };
+    const raw = {
+      ...RAW,
+      delegators: [...(RAW.delegators as unknown[]), extra],
+      delegatorsCount: 2919,
+      externalDelegatedBalance:
+        (RAW.externalDelegatedBalance as number) + extra.delegatedBalance,
+    };
+    const split = parseRewardSplit([raw], BAKE_NUG, 1345);
+
+    expect(delegatorCountDrift(split)).toBe(1);
+    expect(() => assertDelegatorListComplete(split)).not.toThrow();
+  });
+
+  it('aborts on a delegator served twice by paging', () => {
+    // What the count check never caught and this one does: `offset` paging
+    // over a list that shifts serves the same address twice, and the batch
+    // would send that address two transfers.
+    const first = (RAW.delegators as { address: string; delegatedBalance: number }[])[0]!;
+    const raw = {
+      ...RAW,
+      delegators: [...(RAW.delegators as unknown[]), { ...first }],
+      externalDelegatedBalance:
+        (RAW.externalDelegatedBalance as number) + first.delegatedBalance,
+    };
+    const split = parseRewardSplit([raw], BAKE_NUG, 1336);
+
+    expect(() => assertDelegatorListComplete(split)).toThrow(InvariantViolationError);
+    expect(() => assertDelegatorListComplete(split)).toThrow(
+      new RegExp(`${first.address} appears more than once`),
     );
   });
 
