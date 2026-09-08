@@ -5,7 +5,9 @@ import {
   computePayout,
   planBatches,
   sumMutez,
+  type EstimatedBatch,
   type EstimatedTransfer,
+  type RevealCost,
   type FeeRate,
   type Mutez,
   type OperationOutcome,
@@ -117,7 +119,7 @@ export interface DebtSettlementResult {
 
 export type EstimateTransfers = (
   recipients: readonly Recipient[],
-) => Promise<EstimatedTransfer[]>;
+) => Promise<EstimatedBatch>;
 
 export interface OperationStateSource {
   resolve(
@@ -171,6 +173,12 @@ interface PlanningResult {
    * only explainable if BOTH halves of it were written down.
    */
   readonly transferCostByAddress: ReadonlyMap<string, Mutez>;
+  /**
+   * The reveal the paying account still owes, when it owes one. Lives with
+   * the plan and not with a batch: it is not a transfer, and a batch that
+   * carried it could not be rebuilt from the store on a resume (BRES-137).
+   */
+  readonly reveal: RevealCost | null;
 }
 
 export class PayoutEngine {
@@ -238,11 +246,19 @@ export class PayoutEngine {
       );
     }
 
+    // `reveal` only exists on a run that planned. A resumed run rebuilds its
+    // batches from the store, where no estimate lives — and by then the
+    // account is revealed anyway, unless the first attempt died between
+    // planning and the reveal. That one case refuses with a sentence naming
+    // the account instead of a broken invariant (BRES-137).
+    let reveal: RevealCost | null = null;
     if (!snapshot) {
-      snapshot = await this.planAndPersist(request, constants);
+      const planned = await this.planAndPersist(request, constants);
+      snapshot = planned.snapshot;
+      reveal = planned.reveal;
     }
 
-    return this.sendAll(request, snapshot, constants);
+    return this.sendAll(request, snapshot, constants, reveal);
   }
 
   /**
@@ -287,15 +303,18 @@ export class PayoutEngine {
       );
     }
 
-    const record = existing ?? (await this.planSettlement(request, constants));
-    return this.sendSettlement(request, record, constants);
+    // A settlement already on record has no fresh estimate behind it, so it
+    // has no reveal either — by then the account has been revealed anyway.
+    const planned = existing ? null : await this.planSettlement(request, constants);
+    const record = existing ?? planned!.record;
+    return this.sendSettlement(request, record, constants, planned?.reveal ?? null);
   }
 
   /** Everything that decides an amount, before anything is written or signed. */
   private async planSettlement(
     request: DebtSettlementRequest,
     constants: ProtocolConstants,
-  ): Promise<DebtSettlementRecord> {
+  ): Promise<{ record: DebtSettlementRecord; reveal: RevealCost | null }> {
     const { store } = this.deps;
 
     // An open distribution has already read the carry-over it intends to pay.
@@ -322,9 +341,10 @@ export class PayoutEngine {
       recipients.push({ address, amount: owed, emptied: balance === 0n });
     }
 
-    const estimates = await this.deps.estimate(recipients);
+    const { transfers: estimates, reveal } = await this.deps.estimate(recipients);
     const batchPlan = planBatches(estimates, constants, {
       blockGasUtilisationPercent: request.blockGasUtilisationPercent,
+      reveal,
     });
     if (batchPlan.batches.length !== 1) {
       throw new PayoutBlockedError(
@@ -348,7 +368,7 @@ export class PayoutEngine {
     assertBalanceCovers(batchPlan, balance);
 
     const batch = batchPlan.batches[0]!;
-    return store.createDebtSettlement({
+    const record = await store.createDebtSettlement({
       bakerId: request.bakerId,
       settlementId: request.settlementId,
       network: this.deps.network,
@@ -367,6 +387,7 @@ export class PayoutEngine {
       totalFees: batch.totalFees,
       totalBurn: batch.totalBurn,
     });
+    return { record, reveal };
   }
 
   /**
@@ -377,6 +398,7 @@ export class PayoutEngine {
     request: DebtSettlementRequest,
     planned: DebtSettlementRecord,
     constants: ProtocolConstants,
+    reveal: RevealCost | null = null,
   ): Promise<DebtSettlementResult> {
     const { store } = this.deps;
     // Checked against what the HUMAN asked for, not against the record's own
@@ -406,7 +428,7 @@ export class PayoutEngine {
           totalAmountMutez: record.totalAmount.toString(),
         });
 
-      const prepared = await this.deps.injector.prepare(transfers);
+      const prepared = await this.deps.injector.prepare(transfers, reveal);
       await store.recordSettlementIntent({
         bakerId: request.bakerId,
         settlementId: request.settlementId,
@@ -516,7 +538,7 @@ export class PayoutEngine {
   private async planAndPersist(
     request: RunRequest,
     constants: ProtocolConstants,
-  ): Promise<DistributionSnapshot> {
+  ): Promise<{ snapshot: DistributionSnapshot; reveal: RevealCost | null }> {
     const headCycle = await this.deps.headCycle();
     assertCycleDistributable(request.cycle, headCycle, constants);
 
@@ -529,10 +551,11 @@ export class PayoutEngine {
     }
 
     const planning = await this.plan(request, constants);
-    const { split, plan, lines, transfers, transferCostByAddress } = planning;
+    const { split, plan, lines, transfers, transferCostByAddress, reveal } = planning;
 
     const batchPlan = planBatches(transfers, constants, {
       blockGasUtilisationPercent: request.policy.blockGasUtilisationPercent,
+      reveal,
     });
     assertBatchesFit(batchPlan, constants);
     assertCycleCap(batchPlan.totalCost, request.policy.limits, request.cycle);
@@ -609,7 +632,7 @@ export class PayoutEngine {
       payoutFactor: formatPayoutFactor(request.policy.payoutFactor),
     });
 
-    return snapshot;
+    return { snapshot, reveal };
   }
 
   /**
@@ -643,7 +666,7 @@ export class PayoutEngine {
         emptied: entry.emptied,
       }));
 
-    const estimates = await this.deps.estimate(candidates);
+    const { transfers: estimates, reveal } = await this.deps.estimate(candidates);
     const costs = {
       feeByAddress: new Map(estimates.map((e) => [e.address, e.feeMutez])),
       allocationBurn: allocationCost(constants),
@@ -695,7 +718,7 @@ export class PayoutEngine {
       });
     }
 
-    return { split, plan, lines, transfers, transferCostByAddress };
+    return { split, plan, lines, transfers, transferCostByAddress, reveal };
   }
 
   /** Sends, resumes or skips every batch, in order, then settles once. */
@@ -703,6 +726,7 @@ export class PayoutEngine {
     request: RunRequest,
     initial: DistributionSnapshot,
     constants: ProtocolConstants,
+    reveal: RevealCost | null = null,
   ): Promise<PayoutRunResult> {
     const injected: string[] = [];
     const skipped: string[] = [];
@@ -710,10 +734,14 @@ export class PayoutEngine {
     const outcomes = new Map<number, 'confirmed' | 'failed'>();
 
     for (const batch of initial.batches) {
-      const state = await this.settleBatch(request, batch, constants, allowed, {
-        injected,
-        skipped,
-      });
+      const state = await this.settleBatch(
+        request,
+        batch,
+        constants,
+        allowed,
+        { injected, skipped },
+        reveal,
+      );
       outcomes.set(batch.index, state);
     }
 
@@ -792,6 +820,7 @@ export class PayoutEngine {
     constants: ProtocolConstants,
     allowed: ReadonlySet<string>,
     tally: { injected: string[]; skipped: string[] },
+    reveal: RevealCost | null = null,
   ): Promise<'confirmed' | 'failed'> {
     let record = planned;
 
@@ -839,7 +868,7 @@ export class PayoutEngine {
         record = (await this.reloadBatch(request, record.index)) ?? record;
       }
 
-      record = await this.inject(request, record, allowed, tally);
+      record = await this.inject(request, record, allowed, tally, reveal);
       const outcome = await this.awaitOutcome(request, record, constants);
       if (outcome.status === 'confirmed') return 'confirmed';
       record = (await this.reloadBatch(request, record.index)) ?? record;
@@ -857,6 +886,7 @@ export class PayoutEngine {
     record: BatchRecord,
     allowed: ReadonlySet<string>,
     tally: { injected: string[]; skipped: string[] },
+    reveal: RevealCost | null = null,
   ): Promise<BatchRecord> {
     const transfers = toBatchTransfers(record);
 
@@ -879,7 +909,13 @@ export class PayoutEngine {
       totalFeesMutez: record.totalFees.toString(),
     });
 
-    const prepared = await this.deps.injector.prepare(transfers);
+    const prepared = await this.deps.injector.prepare(transfers, reveal);
+    if (prepared.revealOpHash) {
+      await this.audit(request, 'account.revealed', 'ok', {
+        batch: record.index,
+        opHash: prepared.revealOpHash,
+      });
+    }
 
     // Durable before the node ever sees the bytes. If the process dies on the
     // next line, the resume finds this hash and asks the chain about it,

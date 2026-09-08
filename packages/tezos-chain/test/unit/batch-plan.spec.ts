@@ -139,3 +139,41 @@ describe('funding', () => {
     expect(() => assertBalanceCovers(plan, plan.totalCost - 1n)).toThrow(/short of/);
   });
 });
+
+/**
+ * The reveal fee comes out of the same balance (BRES-137).
+ *
+ * It is not in any batch, so nothing in `batches` accounts for it. Leaving it
+ * out of `totalCost` would let `assertBalanceCovers` pass on a balance that
+ * cannot actually pay for the reveal AND the transfers.
+ */
+describe('what the baker must hold includes the reveal it still owes', () => {
+  const transfers = [
+    {
+      address: 'tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb',
+      amount: 1_000_000n,
+      gasLimit: 2_169n,
+      storageLimit: 0n,
+      feeMutez: 488n,
+      burnMutez: 0n,
+    },
+  ];
+
+  it('adds the reveal fee to totalCost', () => {
+    const without = planBatches(transfers, CONSTANTS);
+    const with_ = planBatches(transfers, CONSTANTS, {
+      reveal: { gasLimit: 1_000n, storageLimit: 0n, feeMutez: 374n },
+    });
+
+    expect(with_.totalCost - without.totalCost).toBe(374n);
+    // And it stays out of the batches themselves — those are transfers only.
+    expect(with_.batches).toHaveLength(1);
+    expect(with_.batches[0]!.totalFees).toBe(without.batches[0]!.totalFees);
+  });
+
+  it('changes nothing when there is no reveal to pay for', () => {
+    expect(planBatches(transfers, CONSTANTS, { reveal: null }).totalCost).toBe(
+      planBatches(transfers, CONSTANTS).totalCost,
+    );
+  });
+});

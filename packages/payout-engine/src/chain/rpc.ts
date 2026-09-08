@@ -19,6 +19,28 @@ export interface TransactionContent {
   readonly destination: string;
 }
 
+/**
+ * Publishing the paying account's public key. Once per account, ever.
+ *
+ * It is deliberately NOT part of a payout batch. The batch's operation hash
+ * is written to the store before the operation exists, and that is what makes
+ * a retry safe; a resumed run rebuilds the batch from the store, where no
+ * estimate is available, so a batch that carried a reveal could not be
+ * rebuilt byte-for-byte. Keeping the reveal outside leaves the payout bytes
+ * identical on every attempt (BRES-137).
+ */
+export interface RevealContent {
+  readonly kind: 'reveal';
+  readonly source: string;
+  readonly fee: string;
+  readonly counter: string;
+  readonly gas_limit: string;
+  readonly storage_limit: string;
+  readonly public_key: string;
+}
+
+export type OperationContent = RevealContent | TransactionContent;
+
 export interface HeadRef {
   readonly hash: string;
   readonly level: number;
@@ -31,13 +53,18 @@ export interface PayoutRpc {
   getCounter(address: string): Promise<bigint>;
   getBalance(address: string): Promise<Mutez>;
   /**
+   * The account's published public key, or `null` when it never published
+   * one. `null` is the whole reason a first payout needs a reveal.
+   */
+  getManagerKey(address: string): Promise<string | null>;
+  /**
    * Dry run against the node. Moves nothing; it is the last chance to see a
    * `backtracked` batch before the money leaves.
    */
   preapply(input: {
     readonly protocol: string;
     readonly branch: string;
-    readonly contents: readonly TransactionContent[];
+    readonly contents: readonly OperationContent[];
     readonly signature: string;
   }): Promise<unknown>;
   injectOperation(signedBytesHex: string): Promise<string>;
@@ -100,6 +127,13 @@ export class HttpPayoutRpc implements PayoutRpc {
       `/chains/main/blocks/head/context/contracts/${address}/counter`,
     );
     return BigInt(counter);
+  }
+
+  async getManagerKey(address: string): Promise<string | null> {
+    const key = await this.call<string | null>(
+      `/chains/main/blocks/head/context/contracts/${address}/manager_key`,
+    );
+    return typeof key === 'string' && key !== '' ? key : null;
   }
 
   async getBalance(address: string): Promise<Mutez> {
