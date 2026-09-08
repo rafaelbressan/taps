@@ -133,6 +133,8 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
   const [credentialPublicKey, setCredentialPublicKey] = useState(
     ready.status.signer_credential_public_key,
   );
+  const [tlsCaPresent, setTlsCaPresent] = useState(ready.status.signer_tls_ca_present);
+  const [tlsCaFingerprint, setTlsCaFingerprint] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -196,6 +198,50 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
       setError({
         what: 'Não importei a credencial',
         where: 'credencial do signer',
+        detail: describe(caught),
+      });
+    }
+  }
+
+  /**
+   * O certificado da CA do signer (BRES-144).
+   *
+   * Ele é público — não é segredo, e por isso vai para o banco e não para o
+   * cofre. Mesmo assim entra por arquivo escolhido pelo Rust: quem decide a
+   * raiz de confiança da conexão que pede assinatura decide de quem esta
+   * máquina aceita bytes, e isso não é decisão da janela.
+   */
+  async function importTlsCa() {
+    setError(null);
+    try {
+      const chosen = await pickFile('signer-tls-ca', 'ca.crt do octez-signer');
+      if (!chosen) return;
+      const imported = await invoke<{ sha256: string }>('signer_import_tls_ca', {
+        token: chosen.token,
+      });
+      setTlsCaPresent(true);
+      setTlsCaFingerprint(imported.sha256);
+      onSaved();
+    } catch (caught) {
+      setError({
+        what: 'Não importei o certificado',
+        where: 'CA do signer',
+        detail: describe(caught),
+      });
+    }
+  }
+
+  async function forgetTlsCa() {
+    setError(null);
+    try {
+      await invoke('signer_forget_tls_ca');
+      setTlsCaPresent(false);
+      setTlsCaFingerprint(null);
+      onSaved();
+    } catch (caught) {
+      setError({
+        what: 'Não consegui esquecer o certificado',
+        where: 'CA do signer',
         detail: describe(caught),
       });
     }
@@ -271,6 +317,46 @@ export function Settings({ ready, onSaved }: { ready: Ready; onSaved: () => void
           </button>
           {credentialPresent && (
             <button type="button" className="t-button t-button--quiet" onClick={forgetCredential}>
+              Esquecer
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2 className="card__title">Certificado do signer</h2>
+        <div className="pair">
+          <span className="pair__key">Estado</span>
+          <span className="pair__value">
+            {tlsCaPresent ? 'CA importada' : 'só CAs públicas'}
+          </span>
+        </div>
+        {tlsCaFingerprint && (
+          <div className="pair">
+            <span className="pair__key">SHA-256</span>
+            <span className="pair__value t-address" title={tlsCaFingerprint}>
+              {tlsCaFingerprint}
+            </span>
+          </div>
+        )}
+        <p className="note" style={{ marginTop: 'var(--s-3)' }}>
+          O TAPS só fala com o signer por TLS, e um signer na sua rede não tem certificado de
+          autoridade pública. Importe o <code>ca.crt</code> que o Passo 3 do guia do{' '}
+          <code>octez-signer</code> gera. Sem ele o TAPS não completa a conexão e nenhum ciclo é
+          pago.
+        </p>
+        <p className="note">
+          Depois de importar, confira o SHA-256 acima contra o que{' '}
+          <code>openssl x509 -in ca.crt -noout -fingerprint -sha256</code> mostra na máquina do
+          signer. A CA importada passa a ser a <strong>única</strong> aceita nesta conexão — as
+          públicas saem, porque um signer nunca é um site público.
+        </p>
+        <div className="row" style={{ marginTop: 'var(--s-4)' }}>
+          <button type="button" className="t-button" onClick={importTlsCa}>
+            Escolher o ca.crt do signer
+          </button>
+          {tlsCaPresent && (
+            <button type="button" className="t-button t-button--quiet" onClick={forgetTlsCa}>
               Esquecer
             </button>
           )}

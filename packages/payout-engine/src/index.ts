@@ -1,5 +1,6 @@
 export * from './breakdown';
 export * from './chain/client-auth';
+export * from './chain/estimation-signer';
 export * from './chain/estimator';
 export * from './chain/injector';
 export * from './chain/operations';

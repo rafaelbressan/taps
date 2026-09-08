@@ -1,4 +1,4 @@
-import { HttpError, type Mutez } from '@tezos-suite/chain';
+import { FieldTypeError, HttpError, type Mutez } from '@tezos-suite/chain';
 
 /**
  * The slice of the Octez RPC the payout path needs, as an interface.
@@ -43,13 +43,27 @@ export interface PayoutRpc {
   injectOperation(signedBytesHex: string): Promise<string>;
 }
 
+/**
+ * The public key the chain checks this account's signatures against, or
+ * `null` when the account has never been revealed.
+ *
+ * A port of its own, deliberately not part of `PayoutRpc`: no step of the
+ * money path reads it. It exists for the estimation boundary, which has to
+ * hand Taquito a public key and must get it from the chain rather than from
+ * the signer — the chain is the only thing that decides whether a signature
+ * from this account will be accepted at all.
+ */
+export interface ManagerKeySource {
+  getManagerKey(address: string): Promise<string | null>;
+}
+
 export interface HttpPayoutRpcOptions {
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;
 }
 
 /** Plain HTTP client for the node. Status is checked before the body is parsed. */
-export class HttpPayoutRpc implements PayoutRpc {
+export class HttpPayoutRpc implements PayoutRpc, ManagerKeySource {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
@@ -107,6 +121,28 @@ export class HttpPayoutRpc implements PayoutRpc {
       `/chains/main/blocks/head/context/contracts/${address}/balance`,
     );
     return BigInt(balance);
+  }
+
+  /**
+   * `null` is an answer, not a failure: an implicit account that has never
+   * been revealed has no manager key, and that is exactly what the caller
+   * needs to know. What is refused is anything else — a shape this path does
+   * not understand must not collapse into "not revealed", because the two
+   * lead to opposite decisions.
+   */
+  async getManagerKey(address: string): Promise<string | null> {
+    const path = `/chains/main/blocks/head/context/contracts/${address}/manager_key`;
+    const key = await this.call<unknown>(path);
+    if (key === null) return null;
+    if (typeof key !== 'string' || key === '') {
+      throw new FieldTypeError(
+        'manager_key',
+        `${this.rpcUrl}${path}`,
+        'a base58 public key or null',
+        key,
+      );
+    }
+    return key;
   }
 
   preapply(input: {

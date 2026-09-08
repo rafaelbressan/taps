@@ -26,7 +26,10 @@
 
 mod http;
 mod paths;
-mod signer;
+/// Público para o teste de integração `tests/signer_tls.rs`, que precisa
+/// abrir um servidor TLS de verdade contra `signer::call` — o handshake é
+/// justamente o que nenhum teste alcançava quando o BRES-144 passou.
+pub mod signer;
 mod sql;
 mod tezos;
 
@@ -90,6 +93,39 @@ impl AppState {
         }))
     }
 
+    /// Escreve um valor de `app_settings` deste lado.
+    ///
+    /// Existe para o PEM da CA do signer: ele nasce de um arquivo que só o
+    /// Rust leu, e mandá-lo para a janela gravar seria devolver à tela a
+    /// decisão de qual raiz esta máquina confia.
+    fn put_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.with_db(|database| {
+            database
+                .execute(
+                    None,
+                    "INSERT INTO app_settings (key, value) VALUES (?1, ?2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    &[
+                        SqlValue::Text(key.to_string()),
+                        SqlValue::Text(value.to_string()),
+                    ],
+                )
+                .map(|_| ())
+        })
+    }
+
+    fn delete_setting(&self, key: &str) -> Result<(), String> {
+        self.with_db(|database| {
+            database
+                .execute(
+                    None,
+                    "DELETE FROM app_settings WHERE key = ?1",
+                    &[SqlValue::Text(key.to_string())],
+                )
+                .map(|_| ())
+        })
+    }
+
     fn require_setting(&self, key: &str, why: &str) -> Result<String, String> {
         self.setting(key)?
             .ok_or_else(|| format!("falta configurar {why} — abra Configuração"))
@@ -119,6 +155,10 @@ pub struct AppStatus {
     /// `signer_credential_present: false` não quer dizer "não importou": quer
     /// dizer "não deu para perguntar".
     signer_vault_error: Option<String>,
+    /// `true` quando o baker importou a CA do signer (BRES-144). Sem ela o
+    /// aplicativo só confia em certificado de CA pública, que um signer de
+    /// LAN não tem.
+    signer_tls_ca_present: bool,
     platform: String,
     version: String,
 }
@@ -139,6 +179,7 @@ fn app_status(state: tauri::State<'_, AppState>) -> AppStatus {
             signer::CredentialState::VaultDown(why) => Some(why),
             _ => None,
         },
+        signer_tls_ca_present: state.setting(SIGNER_TLS_CA_KEY).ok().flatten().is_some(),
         platform: std::env::consts::OS.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
@@ -244,6 +285,28 @@ fn signer_forget_credential() -> Result<(), String> {
     signer::forget_credential()
 }
 
+/// Importa o `ca.crt` do `octez-signer` (BRES-144).
+///
+/// Sem isto o aplicativo só confia em CA pública, e o certificado que o
+/// runbook manda o baker gerar nunca é uma. O caminho vem por token do
+/// diálogo do Rust, como o da credencial: a janela não escolhe arquivo.
+#[tauri::command]
+fn signer_import_tls_ca(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<signer::ImportedTlsCa, String> {
+    let path = state.picked.take(Purpose::SignerTlsCa, &token)?;
+    let imported = signer::import_tls_ca_from_file(&path)?;
+    state.put_setting(SIGNER_TLS_CA_KEY, &imported.pem)?;
+    Ok(imported)
+}
+
+/// Volta a confiar só nas raízes públicas embutidas.
+#[tauri::command]
+fn signer_forget_tls_ca(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.delete_setting(SIGNER_TLS_CA_KEY)
+}
+
 /// Assina o pedido de autenticação do signer.
 ///
 /// Substitui o antigo `signer_reveal_credential`, que entregava o segredo à
@@ -254,6 +317,14 @@ fn signer_authenticate(payload_hex: String) -> Result<String, String> {
     signer::authenticate(&payload_hex)
 }
 
+/// Onde o PEM da CA do signer mora em `app_settings`.
+///
+/// Vai para o banco, e não para o cofre, porque um certificado de CA é
+/// público. O que ele decide não é: é a raiz que diz de quem esta máquina
+/// aceita uma assinatura, então quem o escreve é o Rust, a partir de um
+/// arquivo escolhido pelo diálogo nativo.
+const SIGNER_TLS_CA_KEY: &str = "signer.tls_ca";
+
 #[tauri::command]
 async fn signer_call(
     state: tauri::State<'_, AppState>,
@@ -262,7 +333,8 @@ async fn signer_call(
     body: Option<String>,
 ) -> Result<signer::SignerResponse, String> {
     let base = state.require_setting("signer.url", "o endereço do octez-signer")?;
-    signer::call(&base, &method, &path, body).await
+    let tls_ca = state.setting(SIGNER_TLS_CA_KEY)?;
+    signer::call(&base, tls_ca.as_deref(), &method, &path, body).await
 }
 
 // ---------------------------------------------------------------- cadeia
@@ -429,6 +501,8 @@ pub fn run() {
             pick_save_path,
             signer_import_credential,
             signer_forget_credential,
+            signer_import_tls_ca,
+            signer_forget_tls_ca,
             signer_authenticate,
             signer_call,
             chain_request,

@@ -61,6 +61,19 @@ valor, e inventá-lo seria pior. É a razão pela qual o total importado difere
 entre `old` (120,000000 ꜩ) e `upgraded` (120,003970 ꜩ) sobre os *mesmos*
 pagamentos.
 
+## O quinto arquivo: `bres-125-taps-export.sql`
+
+Este não veio do `run.sh`. É o anexo do BRES-125, byte por byte — o export que
+um baker gerou seguindo o `MIGRACAO-DA-VERSAO-ANTIGA.md` num H2 1.4.200 e que a
+Migração recusou dizendo *"não encontrei nenhum INSERT"*. Ele está aqui inteiro
+porque tem o que os outros quatro não têm: as 28 colunas de `settings` de uma
+instalação v1.2.0, a tabela `bondPoolSettings`, e espaço em branco no fim de
+quase toda linha.
+
+Não edite: `test/unit/legacy-script-to.spec.ts` afirma essas três formas antes
+de usar o arquivo, justamente para que ninguém o "arrume" e deixe o teste
+passando contra um arquivo mais fácil que o do baker.
+
 ## Gerar de novo
 
 ```bash

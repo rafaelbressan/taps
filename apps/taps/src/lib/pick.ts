@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core';
 /** Para que serve o arquivo. Um token não muda de propósito. */
 export type PickPurpose =
   | 'signer-credential'
+  | 'signer-tls-ca'
   | 'legacy-export'
   | 'backup-to-restore'
   | 'backup-destination';

@@ -24,6 +24,10 @@ use serde::{Deserialize, Serialize};
 pub enum Purpose {
     /// Arquivo da credencial de cliente do `octez-signer`.
     SignerCredential,
+    /// `ca.crt` do `octez-signer` — público, e mesmo assim escolhido pelo
+    /// diálogo do Rust: quem escolhe a raiz de confiança da conexão que pede
+    /// assinatura decide de quem o TAPS aceita bytes, e isso não é da janela.
+    SignerTlsCa,
     /// Arquivo exportado do banco da versão antiga.
     LegacyExport,
     /// Backup a restaurar.

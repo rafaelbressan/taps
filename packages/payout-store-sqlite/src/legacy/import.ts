@@ -2,6 +2,7 @@ import { tezToMutez, type Mutez } from '@tezos-suite/chain';
 import type { SqlDatabase } from '../db';
 import { iso } from '../codec';
 import {
+  explainEmptyScript,
   LegacyParseError,
   optionalText,
   parseH2Script,
@@ -55,6 +56,21 @@ const CARRIED = new Set([
 ]);
 
 /**
+ * Os mesmos nomes, escritos como o guia de migração os escreve.
+ *
+ * O parser trabalha em minúsculas porque o H2 sobe identificador não citado
+ * para maiúscula; o baker, não. Quem lê a recusa procura `delegatorsPayments`
+ * no `MIGRACAO-DA-VERSAO-ANTIGA.md`, não `DELEGATORSPAYMENTS`.
+ */
+const CARRIED_AS_WRITTEN = [
+  'payments',
+  'delegatorsPayments',
+  'delegatorsFee',
+  'bondPool',
+  'bondPoolSettings',
+];
+
+/**
  * `settings` is read for the baker address only.
  *
  * Everything else in it is either gone (`application_port`, `client_path`,
@@ -95,10 +111,7 @@ export async function importLegacyExport(
   const now = options.now ?? (() => new Date());
   const rows = parseH2Script(script);
   if (rows.length === 0) {
-    throw new LegacyParseError(
-      `não encontrei nenhum INSERT em ${source} — confira se o arquivo veio do comando ` +
-        "SCRIPT TO 'taps-export.sql' rodado no banco antigo",
-    );
+    throw new LegacyParseError(explainEmptyScript(script, source));
   }
 
   const byTable = new Map<string, LegacyRow[]>();
@@ -106,6 +119,19 @@ export async function importLegacyExport(
     const bucket = byTable.get(row.table);
     if (bucket) bucket.push(row);
     else byTable.set(row.table, [row]);
+  }
+
+  // Um arquivo pode ter linhas e mesmo assim não ter nada para migrar — é o
+  // caso do SCRIPT rodado num banco que não é o `tapsDB`. Sem esta recusa a
+  // importação termina "com sucesso", grava um registro de zero pagamentos e
+  // diz ao baker que o histórico dele está lá.
+  if (![...byTable.keys()].some((table) => CARRIED.has(table))) {
+    throw new LegacyParseError(
+      `li ${rows.length} linha(s) em ${source}, mas nenhuma delas está numa tabela de ` +
+        `histórico do TAPS antigo (${CARRIED_AS_WRITTEN.join(', ')}). As tabelas do arquivo ` +
+        `são: ${[...byTable.keys()].sort().join(', ')}. O SCRIPT precisa rodar no banco ` +
+        '.../database/tapsDB, que é o que o TAPS antigo abre',
+    );
   }
 
   const ignoredTables = [...byTable.keys()]

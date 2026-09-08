@@ -47,6 +47,7 @@ interface AppStatus {
   readonly signer_credential_public_key: string | null;
   /** Preenchido quando o cofre do sistema não respondeu. */
   readonly signer_vault_error: string | null;
+  readonly signer_tls_ca_present: boolean;
   readonly platform: string;
   readonly version: string;
 }
