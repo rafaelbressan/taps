@@ -183,7 +183,9 @@ export async function buildRuntime(
   // bytes do `RpcBatchInjector`. `EstimationSigner` dá ao Taquito as duas
   // leituras que a simulação usa — endereço e chave pública — e recusa
   // assinar. A assinatura de verdade continua saindo de um lugar só.
-  const estimationSigner = new EstimationSigner(settings.signerPublicKeyHash, rpc);
+  // O terceiro argumento só é alcançado antes da primeira revelação, quando a
+  // cadeia ainda não tem chave nenhuma para dar (BRES-137).
+  const estimationSigner = new EstimationSigner(settings.signerPublicKeyHash, rpc, signer);
 
   const estimate: EstimateTransfers = async (recipients) => {
     // O Taquito também sai pelo Rust: com `connect-src 'self'`, um cliente HTTP

@@ -38,6 +38,26 @@ export interface EstimateBatchOptions {
   readonly gasBufferPercent?: number;
 }
 
+/**
+ * What it costs to reveal the paying account, when it never has been.
+ *
+ * A Tezos account has to publish its public key once before it can send
+ * anything, and Taquito puts that reveal in front of the batch it is asked to
+ * estimate. The first payout of a freshly created payout key is therefore the
+ * one that meets this — which is the worst moment to meet anything.
+ */
+export interface RevealCost {
+  readonly gasLimit: bigint;
+  readonly storageLimit: bigint;
+  readonly feeMutez: Mutez;
+}
+
+export interface EstimatedBatch {
+  readonly transfers: readonly EstimatedTransfer[];
+  /** Non-null only while the paying account has never been revealed. */
+  readonly reveal: RevealCost | null;
+}
+
 function toBigInt(value: number, field: string): bigint {
   if (!Number.isInteger(value) || value < 0) {
     throw new InvariantViolationError(
@@ -51,14 +71,33 @@ function toBigInt(value: number, field: string): bigint {
 /**
  * Estimates every transfer in a single round trip and returns exactly what
  * the node said, with an explicit gas buffer if the caller asks for one.
+ *
+ * # Why the count is not simply `recipients.length` (BRES-137)
+ *
+ * When the paying account has never been revealed, Taquito prepends a reveal
+ * and answers with one estimate MORE than it was asked for. The old check
+ * read that as a broken invariant and stopped the payout — which meant the
+ * first payout of any new payout key failed, and failed with a sentence about
+ * an invariant instead of about the account.
+ *
+ * The number is not guessed from the difference: the account is asked. A
+ * count that happens to be off by one for any other reason must still be a
+ * refusal, because the alternative is pairing estimates with the wrong
+ * recipients — one delegator paid another delegator's gas, silently.
  */
 export async function estimateTransfers(
   tezos: TezosToolkit,
   recipients: readonly Recipient[],
   options: EstimateBatchOptions = {},
-): Promise<EstimatedTransfer[]> {
-  if (recipients.length === 0) return [];
+): Promise<EstimatedBatch> {
+  if (recipients.length === 0) return { transfers: [], reveal: null };
   const gasBufferPercent = options.gasBufferPercent ?? 0;
+
+  const source = await tezos.signer.publicKeyHash();
+  const managerKey = await tezos.rpc.getManagerKey(source);
+  // `null` from the node means "never revealed". Taquito also answers with an
+  // object for some key types, so the test is presence, not shape.
+  const revealed = managerKey !== null && managerKey !== undefined && managerKey !== '';
 
   const estimates = await tezos.estimate.batch(
     recipients.map((recipient) => ({
@@ -69,15 +108,29 @@ export async function estimateTransfers(
     })),
   );
 
-  if (estimates.length !== recipients.length) {
+  // The reveal comes first, because on chain it has to: the operations it
+  // authorises cannot be checked before the key they are checked against.
+  const revealOffset = revealed ? 0 : 1;
+  if (estimates.length !== recipients.length + revealOffset) {
     throw new InvariantViolationError(
       'estimate.batch returns one estimate per operation',
-      `asked for ${recipients.length}, got ${estimates.length}`,
+      `asked for ${recipients.length} transfers from ${source} ` +
+        `(${revealed ? 'revealed' : 'never revealed, so a reveal is expected'}), ` +
+        `got ${estimates.length} estimates`,
     );
   }
 
-  return recipients.map((recipient, index) => {
-    const estimate = estimates[index]!;
+  const revealEstimate = revealed ? null : estimates[0]!;
+  const reveal: RevealCost | null = revealEstimate
+    ? {
+        gasLimit: toBigInt(revealEstimate.gasLimit, 'gasLimit'),
+        storageLimit: toBigInt(revealEstimate.storageLimit, 'storageLimit'),
+        feeMutez: toBigInt(revealEstimate.suggestedFeeMutez, 'suggestedFeeMutez'),
+      }
+    : null;
+
+  const transfers = recipients.map((recipient, index) => {
+    const estimate = estimates[index + revealOffset]!;
     const gas = toBigInt(estimate.gasLimit, 'gasLimit');
     return {
       address: recipient.address,
@@ -88,6 +141,8 @@ export async function estimateTransfers(
       burnMutez: toBigInt(estimate.burnFeeMutez, 'burnFeeMutez'),
     };
   });
+
+  return { transfers, reveal };
 }
 
 /** Transfer parameters for Taquito, straight from the estimate. */

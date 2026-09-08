@@ -3,7 +3,7 @@ import { PayoutEngine, type EstimateTransfers, type RunRequest } from '../../src
 import { payoutFactor, type PayoutFactor } from '../../src/minimum';
 import { InMemoryPayoutStore } from '../../src/store/memory';
 import type { PayoutStore } from '../../src/store/types';
-import type { PayoutRpc, HeadRef, TransactionContent } from '../../src/chain/rpc';
+import type { PayoutRpc, HeadRef, OperationContent } from '../../src/chain/rpc';
 import {
   FakeChain,
   FakeInjector,
@@ -29,13 +29,18 @@ class FakeRpc implements PayoutRpc {
   async getCounter(): Promise<bigint> {
     return 1n;
   }
+  async getManagerKey(): Promise<string | null> {
+    // The fake chain's payout account is revealed. The unrevealed case has
+    // its own tests, where the fake says so on purpose (BRES-137).
+    return this.chain.managerKey ?? 'edpktest';
+  }
   async getBalance(address: string): Promise<Mutez> {
     return this.chain.balanceOf.get(address) ?? this.chain.balance;
   }
   async preapply(_input: {
     protocol: string;
     branch: string;
-    contents: readonly TransactionContent[];
+    contents: readonly OperationContent[];
     signature: string;
   }): Promise<unknown> {
     return [];

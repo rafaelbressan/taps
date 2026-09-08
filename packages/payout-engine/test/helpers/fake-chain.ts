@@ -1,6 +1,7 @@
 import { encodeOpHash } from '@taquito/utils';
 import type {
-  EstimatedTransfer,
+  EstimatedBatch,
+  RevealCost,
   Mutez,
   OperationOutcome,
   ProtocolConstants,
@@ -17,6 +18,8 @@ import { blockHash } from './addresses';
  * "injected" and "two levels deep".
  */
 export class FakeChain {
+  /** `null` makes the fake account look never-revealed (BRES-137). */
+  managerKey: string | null = 'edpktest';
   headLevel = 1_000;
   balance: Mutez = 1_000_000_000_000n;
   /**
@@ -56,6 +59,10 @@ export class FakeSigner implements PayoutSigner {
     return this.pkh;
   }
 
+  async publicKey(): Promise<string> {
+    return 'edpk-fake';
+  }
+
   async signOperation(forgedBytesHex: string): Promise<string> {
     this.signed.push(forgedBytesHex);
     return 'edsig-fake';
@@ -89,6 +96,7 @@ export class FakeInjector implements BatchInjector {
     const opHash = encodeOpHash(bytes.padEnd(200, '0'));
     await this.signer.signOperation(bytes);
     const prepared: PreparedBatch = {
+      revealOpHash: null,
       branch,
       branchLevel: this.chain.headLevel,
       protocol: 'PsTestProtocolHashForUnitTestsOnly000000000000',
@@ -158,6 +166,8 @@ export interface FakeEstimatorOptions {
   /** Storage granted to a destination that needs allocating. */
   readonly allocationStorage?: bigint;
   readonly allocationBurn?: Mutez;
+  /** Set when the test wants an account that was never revealed. */
+  readonly reveal?: RevealCost | null;
 }
 
 /**
@@ -166,13 +176,15 @@ export interface FakeEstimatorOptions {
  * the current TAPS overrides with a fixed zero.
  */
 export function fakeEstimator(options: FakeEstimatorOptions) {
-  return async (recipients: readonly Recipient[]): Promise<EstimatedTransfer[]> =>
-    recipients.map((recipient) => ({
+  return async (recipients: readonly Recipient[]): Promise<EstimatedBatch> => ({
+    reveal: options.reveal ?? null,
+    transfers: recipients.map((recipient) => ({
       address: recipient.address,
       amount: recipient.amount,
       gasLimit: options.gasLimit ?? 2169n,
       storageLimit: recipient.emptied ? (options.allocationStorage ?? 257n) : 0n,
       feeMutez: options.feeMutez,
       burnMutez: recipient.emptied ? (options.allocationBurn ?? 64_250n) : 0n,
-    }));
+    })),
+  });
 }

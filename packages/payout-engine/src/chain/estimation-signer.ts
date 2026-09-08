@@ -40,19 +40,38 @@ import type { ManagerKeySource } from './rpc';
  *   authenticated round trip per estimate chunk, and it answers what the
  *   signer holds; the chain answers what the chain will accept, which is the
  *   only fact this path actually needs. When the chain answers `null` the
- *   account was never revealed and the run stops there — see
- *   `PayoutAccountNotRevealedError` for why TAPS does not reveal it itself.
+ *   account was never revealed, and only then is the signer asked — it is the
+ *   one place the key still exists, and the first payout of a new payout key
+ *   cannot be priced without it (BRES-137). The reveal that follows is its
+ *   own operation, built by the injector, never part of a payout batch.
  *
  * The watermark question does not arise on this side at all. `0x03` belongs
  * to `signOperation`, which is the only place a byte is ever signed, and it
  * is the one the signer's `--magic-bytes 0x03` admits.
  */
+/** Just the public half. Narrower than `PayoutSigner` on purpose. */
+export interface PublicKeySource {
+  publicKey(): Promise<string>;
+}
+
 export class EstimationSigner implements Signer {
   private cachedPublicKey: string | null = null;
 
   constructor(
     private readonly payoutAddress: string,
     private readonly chain: ManagerKeySource,
+    /**
+     * Where the public key comes from while the chain still has none.
+     *
+     * Only reachable before the account has ever been revealed, which is
+     * exactly the state a payout key is in on the day it is made. The chain
+     * cannot answer for an account it has never seen sign, and estimating
+     * the first payout needs the key to price the reveal (BRES-137).
+     *
+     * `GET /keys/<pkh>` on the signer is unauthenticated — it returns the
+     * public half — so this costs a plain round trip, not a signature.
+     */
+    private readonly signerOfLastResort?: PublicKeySource,
   ) {}
 
   async publicKeyHash(): Promise<string> {
@@ -69,24 +88,32 @@ export class EstimationSigner implements Signer {
     if (this.cachedPublicKey !== null) return this.cachedPublicKey;
 
     const managerKey = await this.chain.getManagerKey(this.payoutAddress);
-    if (managerKey === null) {
+    // An account the chain has never seen sign has no key to give. Asking
+    // the signer is the only remaining source, and the check below is what
+    // keeps that from being a weaker answer than the chain's.
+    const publicKey = managerKey ?? (await this.signerOfLastResort?.publicKey());
+    if (publicKey === undefined || publicKey === null) {
       throw new PayoutAccountNotRevealedError(this.payoutAddress);
     }
 
     // Cheap, and it is the one check that makes a wrong answer here
     // impossible to carry: a public key that does not hash to the payout
     // address is either another account's or a node that is not on the
-    // network this run thinks it is on.
-    const derived = getPkhfromPk(managerKey);
+    // network this run thinks it is on. It matters more, not less, when the
+    // key came from the signer instead of the chain.
+    const derived = getPkhfromPk(publicKey);
     if (derived !== this.payoutAddress) {
       throw new InvariantViolationError(
-        'the manager_key on chain hashes to the payout address',
+        'the public key offered for the payout account hashes to it',
         `${this.payoutAddress} answered with a public key that hashes to ${derived}`,
       );
     }
 
-    this.cachedPublicKey = managerKey;
-    return managerKey;
+    // Only the chain's answer is cached. A key borrowed from the signer is
+    // provisional by nature: the moment the reveal lands, the chain becomes
+    // the authority again and must be re-read.
+    if (managerKey !== null) this.cachedPublicKey = managerKey;
+    return publicKey;
   }
 
   /** Estimation is simulated under a stub signature. Nothing signs here. */

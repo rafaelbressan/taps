@@ -1,7 +1,7 @@
 import { localForger } from '@taquito/local-forging';
 import { b58DecodeAndCheckPrefix, buf2hex, encodeOpHash, signaturePrefixes } from '@taquito/utils';
-import { InvariantViolationError, type Mutez } from '@tezos-suite/chain';
-import type { PayoutRpc, TransactionContent } from './rpc';
+import { InvariantViolationError, type Mutez, type RevealCost } from '@tezos-suite/chain';
+import type { HeadRef, PayoutRpc, RevealContent, TransactionContent } from './rpc';
 import type { PayoutSigner } from './signer';
 
 /**
@@ -39,16 +39,42 @@ export interface PreparedBatch {
   readonly signedBytes: string;
   /** Known before injection. This is what makes the retry safe. */
   readonly opHash: string;
+  /**
+   * Hash of the reveal that had to go first, when one did.
+   *
+   * Its own operation, injected before the batch and never inside it — see
+   * `RevealContent`. Reported so the trail can show it.
+   */
+  readonly revealOpHash: string | null;
 }
 
 export interface BatchInjector {
-  prepare(transfers: readonly BatchTransfer[]): Promise<PreparedBatch>;
+  /**
+   * `reveal` is the cost of publishing the source's public key, and is only
+   * consulted when the chain says the account has never published one.
+   */
+  prepare(
+    transfers: readonly BatchTransfer[],
+    reveal?: RevealCost | null,
+  ): Promise<PreparedBatch>;
   inject(prepared: PreparedBatch): Promise<string>;
 }
 
 export interface RpcBatchInjectorOptions {
   /** Dry-run against the node before injecting. On by default. */
   readonly preapply?: boolean;
+  /**
+   * How many times to ask the chain whether the reveal has landed, and how
+   * long to wait between asks.
+   *
+   * `preapply` validates against the head BLOCK, not the mempool: while the
+   * reveal is only in the mempool the batch's counter is still "in the
+   * future" and the node refuses it. So the reveal is waited for — once per
+   * account, ever (BRES-137).
+   */
+  readonly revealPolls?: number;
+  readonly revealPollIntervalMs?: number;
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -62,6 +88,9 @@ export interface RpcBatchInjectorOptions {
  */
 export class RpcBatchInjector implements BatchInjector {
   private readonly withPreapply: boolean;
+  private readonly revealPolls: number;
+  private readonly revealPollIntervalMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
     private readonly rpc: PayoutRpc,
@@ -69,9 +98,16 @@ export class RpcBatchInjector implements BatchInjector {
     options: RpcBatchInjectorOptions = {},
   ) {
     this.withPreapply = options.preapply ?? true;
+    this.revealPolls = options.revealPolls ?? 40;
+    this.revealPollIntervalMs = options.revealPollIntervalMs ?? 3_000;
+    this.sleep =
+      options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
-  async prepare(transfers: readonly BatchTransfer[]): Promise<PreparedBatch> {
+  async prepare(
+    transfers: readonly BatchTransfer[],
+    reveal?: RevealCost | null,
+  ): Promise<PreparedBatch> {
     if (transfers.length === 0) {
       throw new InvariantViolationError(
         'a batch has at least one transfer',
@@ -80,10 +116,31 @@ export class RpcBatchInjector implements BatchInjector {
     }
 
     const source = await this.signer.publicKeyHash();
-    const [head, counter] = await Promise.all([
+    const [head, counter, managerKey] = await Promise.all([
       this.rpc.getHead(),
       this.rpc.getCounter(source),
+      this.rpc.getManagerKey(source),
     ]);
+
+    // An account that never published its public key cannot send anything,
+    // and that is the state every payout key is in on the day it is made.
+    // The reveal goes first, on its own, and the batch counter starts after
+    // it — the batch bytes stay exactly what they would have been.
+    let revealOpHash: string | null = null;
+    let firstCounter = counter + 1n;
+    if (managerKey === null) {
+      if (!reveal) {
+        throw new InvariantViolationError(
+          'the cost of the reveal is known before the account is revealed',
+          `${source} has never been revealed and no reveal estimate reached the injector. ` +
+            'A resumed run rebuilds the batch from the store, where no estimate lives; ' +
+            `reveal the account once with \`octez-client reveal key for <alias>\` and the ` +
+            'run continues on its own.',
+        );
+      }
+      revealOpHash = await this.revealSource(source, head, counter + 1n, reveal);
+      firstCounter = counter + 2n;
+    }
 
     const contents = transfers.map((transfer, index): TransactionContent => {
       if (transfer.amount <= 0n) {
@@ -96,7 +153,7 @@ export class RpcBatchInjector implements BatchInjector {
         kind: 'transaction',
         source,
         fee: transfer.feeMutez.toString(),
-        counter: (counter + BigInt(index) + 1n).toString(),
+        counter: (firstCounter + BigInt(index)).toString(),
         gas_limit: transfer.gasLimit.toString(),
         storage_limit: transfer.storageLimit.toString(),
         amount: transfer.amount.toString(),
@@ -130,13 +187,61 @@ export class RpcBatchInjector implements BatchInjector {
       branch: head.hash,
       branchLevel: head.level,
       protocol: head.protocol,
-      firstCounter: counter + 1n,
+      firstCounter,
+      revealOpHash,
       contents,
       forgedBytes,
       signature,
       signedBytes,
       opHash,
     };
+  }
+
+  /**
+   * Reveals the paying account and returns the operation hash.
+   *
+   * The public key comes from the signer that holds the secret one, not from
+   * configuration: a configured copy can disagree with the key that actually
+   * signs, and the account would be revealed under the wrong key.
+   */
+  private async revealSource(
+    source: string,
+    head: HeadRef,
+    counter: bigint,
+    reveal: RevealCost,
+  ): Promise<string> {
+    const publicKey = await this.signer.publicKey();
+    const { content, forgedBytes } = await forgeReveal(
+      source,
+      publicKey,
+      head.hash,
+      counter,
+      reveal,
+    );
+    const signature = await this.signer.signOperation(forgedBytes);
+    if (this.withPreapply) {
+      await this.rpc.preapply({
+        protocol: head.protocol,
+        branch: head.hash,
+        contents: [content],
+        signature,
+      });
+    }
+    const opHash = await this.rpc.injectOperation(forgedBytes + signatureToHex(signature));
+
+    // Waited for, not assumed. Until the reveal is in a block the node's view
+    // of the account's counter has not moved, and the batch that follows it
+    // reads as `counter_in_the_future`.
+    for (let poll = 0; poll < this.revealPolls; poll += 1) {
+      await this.sleep(this.revealPollIntervalMs);
+      if ((await this.rpc.getManagerKey(source)) !== null) return opHash;
+    }
+    throw new InvariantViolationError(
+      'the reveal is in a block before the batch that depends on it is built',
+      `${source} was revealed by ${opHash}, and after ${this.revealPolls} tries the chain ` +
+        'still does not show the key. The operation may yet be included; running again picks ' +
+        'up where this stopped.',
+    );
   }
 
   async inject(prepared: PreparedBatch): Promise<string> {
@@ -151,6 +256,55 @@ export class RpcBatchInjector implements BatchInjector {
     }
     return hash;
   }
+}
+
+/**
+ * Publishes the source's public key, as its own operation.
+ *
+ * Same discipline as a batch and for the same reason — the bytes are forged
+ * here, parsed back, and only then signed. A reveal is a cheap operation, but
+ * it is still bytes the payout key puts its name on, and "the signer will
+ * sign whatever it is handed" is the assumption this whole module exists to
+ * avoid.
+ */
+async function forgeReveal(
+  source: string,
+  publicKey: string,
+  branch: string,
+  counter: bigint,
+  reveal: RevealCost,
+): Promise<{ content: RevealContent; forgedBytes: string }> {
+  const content: RevealContent = {
+    kind: 'reveal',
+    source,
+    fee: reveal.feeMutez.toString(),
+    counter: counter.toString(),
+    gas_limit: reveal.gasLimit.toString(),
+    // A reveal allocates nothing. Anything above zero here would be a
+    // number nobody can explain.
+    storage_limit: '0',
+    public_key: publicKey,
+  };
+  const forgedBytes = await localForger.forge({
+    branch,
+    contents: [content] as unknown as Parameters<typeof localForger.forge>[0]['contents'],
+  });
+  const parsed = await localForger.parse(forgedBytes);
+  const back = parsed.contents[0] as Record<string, unknown> | undefined;
+  if (!back || back['kind'] !== 'reveal') {
+    throw new InvariantViolationError(
+      'the forged reveal is a reveal',
+      `forged a ${JSON.stringify(back?.['kind'])}`,
+    );
+  }
+  if (back['source'] !== source || back['public_key'] !== publicKey) {
+    throw new InvariantViolationError(
+      'the forged reveal names the paying account and its own key',
+      `forged ${String(back['source'])} / ${String(back['public_key'])}, ` +
+        `planned ${source} / ${publicKey}`,
+    );
+  }
+  return { content, forgedBytes };
 }
 
 /**

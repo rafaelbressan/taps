@@ -17,6 +17,14 @@ export interface PayoutSigner {
   /** The address the operations are sourced from. */
   publicKeyHash(): Promise<string>;
   /**
+   * The account's public key, read from the signer that holds the secret one.
+   *
+   * Needed exactly once per account, to reveal it. It is public by
+   * definition, and asking the signer for it beats keeping a copy that can
+   * disagree with the key actually doing the signing.
+   */
+  publicKey(): Promise<string>;
+  /**
    * Signs the generic-operation watermark (`0x03`) followed by the forged
    * bytes, and returns the base58 signature. `--magic-bytes 0x03` on the
    * signer refuses block headers and attestations, so this is the only kind
@@ -232,6 +240,31 @@ export class OctezRemoteSigner implements PayoutSigner {
 
   async publicKeyHash(): Promise<string> {
     return this.config.publicKeyHash;
+  }
+
+  /**
+   * `GET /keys/<pkh>` on the signer answers `{"public_key": "edpk…"}`.
+   *
+   * Unauthenticated on purpose: it is the public half, and asking for it with
+   * a signing credential would be spending authority to read something
+   * anyone can read from the chain once the account is revealed.
+   */
+  async publicKey(): Promise<string> {
+    const response = await this.transport.send('GET', `/keys/${this.config.publicKeyHash}`);
+    if (response.status !== 200) {
+      throw new HttpError(
+        response.status,
+        `${this.config.url}${`/keys/${this.config.publicKeyHash}`}`,
+        response.body,
+      );
+    }
+    const parsed = JSON.parse(response.body) as { public_key?: unknown };
+    if (typeof parsed.public_key !== 'string' || parsed.public_key === '') {
+      throw new ConfigurationError(
+        `the signer answered without a "public_key" field: ${response.body.slice(0, 200)}`,
+      );
+    }
+    return parsed.public_key;
   }
 
   async signOperation(forgedBytesHex: string): Promise<string> {

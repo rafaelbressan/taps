@@ -332,10 +332,13 @@ export class EstimationSignerCannotSignError extends PayoutEngineError {
 export class PayoutAccountNotRevealedError extends PayoutEngineError {
   constructor(readonly publicKeyHash: string) {
     super(
-      `${publicKeyHash} has no manager_key on chain — the payout account was never ` +
-        'revealed and cannot emit any operation. Reveal it once from the signer host ' +
-        '(octez-client, against the same remote key) and fund it; TAPS will not add a ' +
-        'reveal to a payout batch on its own',
+      `${publicKeyHash} has no manager_key on chain and the signer did not offer a ` +
+        'public key either — so nothing can say which key this account signs with, and ' +
+        'no operation can be built. Confirm the payout address matches the key the ' +
+        'signer holds. TAPS reveals the account itself when the signer answers ' +
+        '(BRES-137), as its own operation and never inside a payout batch: a batch that ' +
+        'carried one could not be rebuilt from the store on a resume, and the hash ' +
+        'written before the operation exists is what makes a retry safe',
     );
   }
 }
