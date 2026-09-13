@@ -44,7 +44,3 @@ O que a SPEC-0001 decide especificamente para o TAPS está resumido em [`spec/RE
 | [`deployment/MIGRACAO-DA-VERSAO-ANTIGA.md`](deployment/MIGRACAO-DA-VERSAO-ANTIGA.md) | Vir do TAPS em Lucee: o que atravessa, o que fica para trás e por quê |
 | [`deployment/BACKUP-E-RESTAURACAO.md`](deployment/BACKUP-E-RESTAURACAO.md) | Um arquivo, um botão, e o caminho de volta quando se escolhe o arquivo errado |
 | [`deployment/BAKINGNET-PAYOUT-VALIDATION.md`](deployment/BAKINGNET-PAYOUT-VALIDATION.md) | O combinado para fechar o payout em Bakingnet: como subir o `octez-signer` (metade do Rafael) e como rodar o harness contra o motor de produção |
-| [`deployment/DEPLOYMENT_RUNBOOK.md`](deployment/DEPLOYMENT_RUNBOOK.md) | **Histórico.** Deploy do sistema de nuvem que a ADR-0001 §4 substituiu |
-| [`deployment/TROUBLESHOOTING.md`](deployment/TROUBLESHOOTING.md) | **Histórico.** Diagnóstico daquele mesmo sistema |
-
-Os dois últimos descrevem o TAPS como serviço de nuvem, com Postgres, Redis e ECS. A decisão local-first foi tomada e implementada em BRES-48; eles ficam como registro do que existia, não como instrução.
